@@ -84,7 +84,7 @@ class DatabaseManager:
                             token_signature VARCHAR(128) NOT NULL,
                             password_salt VARCHAR(64) NOT NULL,
                             password_hash VARCHAR(128) NOT NULL,
-                            face_profile_hash VARCHAR(128),
+                            face_profile_hash TEXT,
                             is_active BOOLEAN NOT NULL DEFAULT 1,
                             registered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
                         );
@@ -159,6 +159,12 @@ class DatabaseManager:
         pwd_hash = hashlib.sha256(salt_bytes + default_password.encode("utf-8")).hexdigest()
         token_sig = "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"
 
+        seed_face_path = Path(__file__).resolve().parent / "default_face_seed.hex"
+        if seed_face_path.exists():
+            default_face = seed_face_path.read_text(encoding="utf-8").strip()
+        else:
+            default_face = hashlib.sha256(b"LEXVAULT_BIOMETRIC_ENROLLED_V1").hexdigest()
+
         self.register_dongle(
             serial_number=default_serial,
             operator_name="Kompol. Dr. Aris Prakoso, M.Si (Forensik)",
@@ -166,7 +172,7 @@ class DatabaseManager:
             token_signature=token_sig,
             password_salt=salt_hex,
             password_hash=pwd_hash,
-            face_profile_hash=hashlib.sha256(b"LEXVAULT_BIOMETRIC_ENROLLED_V1").hexdigest(),
+            face_profile_hash=default_face,
             is_active=True,
         )
 
@@ -297,6 +303,32 @@ class DatabaseManager:
                     WHERE serial_number = ?
                     """,
                     (password_salt, password_hash, serial_number),
+                )
+                conn.commit()
+                return True
+            finally:
+                conn.close()
+
+    def update_dongle_face_profile(self, serial_number: str, face_profile_hash: str) -> bool:
+        if self.cloud_online and self.supabase_client is not None:
+            try:
+                self.supabase_client.table("authorized_dongles").update(
+                    {"face_profile_hash": face_profile_hash}
+                ).eq("serial_number", serial_number).execute()
+            except Exception as exc:
+                self.cloud_online = False
+                self._log(f"Supabase face profile update fallback ({exc}).", "WARN")
+
+        with self._lock:
+            conn = self._get_sqlite_conn()
+            try:
+                conn.execute(
+                    """
+                    UPDATE authorized_dongles
+                    SET face_profile_hash = ?
+                    WHERE serial_number = ?
+                    """,
+                    (face_profile_hash, serial_number),
                 )
                 conn.commit()
                 return True

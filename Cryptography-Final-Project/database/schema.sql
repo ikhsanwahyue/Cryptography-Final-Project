@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS authorized_dongles (
     token_signature VARCHAR(128) NOT NULL,
     password_salt VARCHAR(64) NOT NULL,
     password_hash VARCHAR(128) NOT NULL,
-    face_profile_hash VARCHAR(128),
+    face_profile_hash TEXT,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     registered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

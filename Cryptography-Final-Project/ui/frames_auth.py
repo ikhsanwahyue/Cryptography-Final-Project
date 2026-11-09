@@ -58,8 +58,11 @@ class AuthWizardFrame(ctk.CTkFrame):
         # Webcam capture state
         self._cap: Optional[Any] = None
         self._camera_running: bool = False
+        self._last_raw_frame: Optional[Any] = None
+        self._last_bbox: Tuple[int, int, int, int] = (0, 0, 0, 0)
+        # Consecutive frame lock requirement
         self._face_lock_counter: int = 0
-        self._required_face_frames: int = 10
+        self._required_face_frames: int = 6
         self._cam_ctk_image: Optional[ctk.CTkImage] = None
 
         self._build_layout()
@@ -352,20 +355,6 @@ class AuthWizardFrame(ctk.CTkFrame):
         )
         self.btn_start_cam.pack(fill="x", padx=14, pady=(0, 8))
 
-        self.btn_bypass_cam = ctk.CTkButton(
-            ctrl_frame,
-            text="⚡ FALLBACK BYPASS (TESTING / NO WEBCAM)",
-            font=get_mono_font(11, "bold"),
-            height=34,
-            fg_color="#451A03",
-            hover_color="#78350F",
-            text_color=COLOR_AMBER,
-            border_color=COLOR_AMBER,
-            border_width=1,
-            command=self.trigger_biometric_bypass,
-        )
-        self.btn_bypass_cam.pack(fill="x", padx=14, pady=(0, 8))
-
         nav_row = ctk.CTkFrame(ctrl_frame, fg_color="transparent")
         nav_row.pack(side="bottom", fill="x", padx=14, pady=14)
 
@@ -395,8 +384,8 @@ class AuthWizardFrame(ctk.CTkFrame):
 
     def start_webcam_scan(self) -> None:
         if not OPENCV_AVAILABLE or cv2 is None:
-            self.log("OpenCV tidak tersedia; mengaktifkan Fallback Biometric Bypass.", "WARN")
-            self.trigger_biometric_bypass()
+            self.log("OpenCV tidak tersedia pada sistem.", "ERROR")
+            self.lbl_bio_status.set_status("OPENCV NOT INSTALLED", "DANGER")
             return
 
         if self._camera_running:
@@ -408,24 +397,24 @@ class AuthWizardFrame(ctk.CTkFrame):
                 self.stop_webcam()
                 self._clear_camera_label_image()
                 self.camera_label.configure(
-                    text="[ WEBCAM UNAVAILABLE OR PERMISSION DENIED ]\nmacOS/OS blocked camera access for Terminal.\nClick '⚡ FALLBACK BYPASS' to continue.",
-                    text_color=COLOR_AMBER,
+                    text="[ WEBCAM UNAVAILABLE OR PERMISSION DENIED ]\nmacOS/OS blocked camera access for Terminal.\nPlease grant camera permission in System Settings.",
+                    text_color=COLOR_CRIMSON,
                 )
                 self.log(
-                    "Webcam fisik tidak terdeteksi atau izin kamera belum diberikan ke Terminal. Gunakan tombol Fallback Bypass.",
-                    "WARN",
+                    "Webcam fisik tidak terdeteksi atau izin kamera belum diberikan ke Terminal.",
+                    "ERROR",
                 )
-                self.lbl_bio_status.set_status("WEBCAM BLOCKED - USE BYPASS", "WARN")
+                self.lbl_bio_status.set_status("WEBCAM BLOCKED", "DANGER")
                 return
 
             self._camera_running = True
             self._face_lock_counter = 0
-            self.lbl_bio_status.set_status("SCANNING FACE VIA HAAR CASCADE...", "INFO")
-            self.log("OpenCV Haar Cascade (haarcascade_frontalface_default.xml) aktif.", "INFO")
+            self.lbl_bio_status.set_status("SCANNING FACE VIA BIOMETRIC SENSOR...", "INFO")
+            self.log("Biometric Face Scanner aktif.", "INFO")
             self._poll_webcam_frame()
         except Exception as exc:
-            self.log(f"Gagal membuka kamera: {exc}. Gunakan Fallback Bypass.", "WARN")
-            self.lbl_bio_status.set_status("CAMERA ERROR - USE BYPASS", "WARN")
+            self.log(f"Gagal membuka kamera: {exc}.", "ERROR")
+            self.lbl_bio_status.set_status("CAMERA ERROR", "DANGER")
 
     def _poll_webcam_frame(self) -> None:
         if not self._camera_running or self._cap is None:
@@ -437,17 +426,39 @@ class AuthWizardFrame(ctk.CTkFrame):
             self.lbl_bio_status.set_status("CAMERA STREAM INTERRUPTED", "WARN")
             return
 
-        detected, annotated_bgr, _, _ = self.auth_gate.detect_face_in_frame(frame)
+        detected, annotated_bgr, _, bbox = self.auth_gate.detect_face_in_frame(frame)
+        self._last_raw_frame = frame.copy()
+        self._last_bbox = bbox
+
         rgb = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
         pil_img = Image.fromarray(rgb)
         ctk_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(440, 260))
         self._cam_ctk_image = ctk_img
         self.camera_label.configure(image=ctk_img, text="")
 
-        if detected:
+        # Check face match against enrolled profile if available
+        is_matched = False
+        similarity_pct = 0.0
+        if detected and self.verified_dongle:
+            rec = self.auth_gate.db_manager.get_dongle(self.verified_dongle.serial_number) or {}
+            stored_hash = str(rec.get("face_profile_hash") or "").strip()
+            cand_vec = self.auth_gate.extract_face_feature_vector(frame, bbox)
+            if cand_vec and stored_hash:
+                is_matched, similarity_pct = self.auth_gate.compare_face_feature(cand_vec, stored_hash)
+            elif detected:
+                # Fallback if no specific template enrolled yet
+                is_matched = True
+                similarity_pct = 100.0
+
+        if detected and is_matched:
             self._face_lock_counter = min(self._required_face_frames, self._face_lock_counter + 1)
+            self.lbl_bio_status.set_status(f"MATCHING FACE ({similarity_pct:.0f}%)", "INFO")
+        elif detected and not is_matched:
+            self._face_lock_counter = max(0, self._face_lock_counter - 1)
+            self.lbl_bio_status.set_status(f"UNAUTHORIZED FACE ({similarity_pct:.0f}%)", "DANGER")
         else:
             self._face_lock_counter = max(0, self._face_lock_counter - 1)
+            self.lbl_bio_status.set_status("SEARCHING FACE...", "WARN")
 
         ratio = self._face_lock_counter / float(self._required_face_frames)
         self.bio_progress.set(ratio)
@@ -461,10 +472,10 @@ class AuthWizardFrame(ctk.CTkFrame):
             self.lbl_bio_status.set_status("BIOMETRIC FACE VERIFIED", "SUCCESS")
             self.badge_step2.set_status("STAGE 2: FACE VERIFIED", "SUCCESS")
             self.btn_next_step3.configure(state="normal")
-            self.log("Biometrik Wajah (Haar Cascade) Terverifikasi.", "SUCCESS")
+            self.log(f"Biometrik Wajah Terverifikasi (Match: {similarity_pct:.1f}%).", "SUCCESS")
             return
 
-        self.after(45, self._poll_webcam_frame)
+        self.after(25, self._poll_webcam_frame)
 
     def stop_webcam(self) -> None:
         self._camera_running = False
@@ -490,22 +501,7 @@ class AuthWizardFrame(ctk.CTkFrame):
             pass
         self._cam_ctk_image = None
 
-    def trigger_biometric_bypass(self) -> None:
-        self.stop_webcam()
-        self.biometric_verified = True
-        self.bio_progress.set(1.0)
-        self.lbl_bio_progress_text.configure(
-            text="Biometric Fallback Bypass Active (ISO Testing Protocol)"
-        )
-        self.lbl_bio_status.set_status("BYPASS ACTIVE (VERIFIED)", "SUCCESS")
-        self.badge_step2.set_status("STAGE 2: BYPASS VERIFIED", "SUCCESS")
-        self._clear_camera_label_image()
-        self.camera_label.configure(
-            text="[ BIOMETRIC FALLBACK BYPASS VERIFIED ]\nHaar Cascade Hardware Simulation Approved\nProceed to Stage 3 Salted Password Hash",
-            text_color=COLOR_EMERALD,
-        )
-        self.btn_next_step3.configure(state="normal")
-        self.log("Stage 2 Biometric Bypass diaktifkan untuk lingkungan pengujian.", "WARN")
+
 
     # =========================================================================
     # SCREEN 3: SALTED SHA-256 PASSWORD HASH AUTHENTICATION

@@ -15,6 +15,7 @@ from typing import Any, Callable, Optional
 import customtkinter as ctk
 from PIL import Image, ImageDraw
 
+from core.auth_gate import OPENCV_AVAILABLE, AuthGate, DongleStatus, cv2
 from core.file_crypto import BinaryFileLocker
 from core.local_blockchain import LocalBlockchain
 from core.stego_engine import StegoEngine
@@ -55,6 +56,8 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         blockchain: LocalBlockchain,
         web3_worker: Web3SyncWorker,
         log_callback: Callable[[str, str], None],
+        auth_gate: Optional[AuthGate] = None,
+        active_dongle: Optional[DongleStatus] = None,
         on_chain_status_change: Optional[Callable[[bool], None]] = None,
         **kwargs: Any,
     ) -> None:
@@ -62,8 +65,15 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         self.db_manager = db_manager
         self.blockchain = blockchain
         self.web3_worker = web3_worker
+        self.auth_gate = auth_gate
+        self.active_dongle = active_dongle
         self.log = log_callback
         self.on_chain_status_change = on_chain_status_change
+
+        # Biometric enroll camera state in Tab 5
+        self._cam_cap: Optional[Any] = None
+        self._cam_running: bool = False
+        self._last_raw_frame: Optional[Any] = None
 
         self.latest_explorer_url: str = "https://amoy.polygonscan.com/"
         self._build_tabs()
@@ -88,11 +98,13 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         self.tab_file = self.tabview.add("2 // FILE LOCKER (ChaCha20)")
         self.tab_stego = self.tabview.add("3 // STEGO STUDIO (LSB PNG)")
         self.tab_audit = self.tabview.add("4 // CHAIN OF CUSTODY AUDIT")
+        self.tab_security = self.tabview.add("5 // SECURITY & BIOMETRIC")
 
         self._build_tab1_super_crypto()
         self._build_tab2_file_locker()
         self._build_tab3_stego_studio()
         self._build_tab4_audit_ledger()
+        self._build_tab5_security()
 
     # =========================================================================
     # HELPER: SEAL EVIDENCE TO DUAL-LAYER BLOCKCHAIN + DATABASE
@@ -399,7 +411,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         ctk.CTkButton(
             actions_row,
-            text="🔐 LOCK BINARY FILE (.locked) & ANCHOR TO BLOCKCHAIN",
+            text="LOCK BINARY FILE (.locked) & ANCHOR TO BLOCKCHAIN",
             height=42,
             font=get_mono_font(12, "bold"),
             fg_color=COLOR_PRIMARY,
@@ -409,7 +421,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         ctk.CTkButton(
             actions_row,
-            text="🔓 UNLOCK & RESTORE ORIGINAL BINARY FILE",
+            text="UNLOCK & RESTORE ORIGINAL BINARY FILE",
             height=42,
             font=get_mono_font(12, "bold"),
             fg_color=COLOR_EMERALD,
@@ -737,7 +749,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         ctk.CTkButton(
             ctrl_row,
-            text="🛡 VERIFY FULL CHAIN INTEGRITY",
+            text="VERIFY FULL CHAIN INTEGRITY",
             height=34,
             font=get_mono_font(11, "bold"),
             fg_color=COLOR_EMERALD,
@@ -761,7 +773,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         ctk.CTkButton(
             ctrl_row,
-            text="🔧 RE-MINE & REPAIR LEDGER",
+            text="RE-MINE & REPAIR LEDGER",
             height=34,
             font=get_mono_font(11, "bold"),
             fg_color=COLOR_SURFACE_DARK,
@@ -890,4 +902,215 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         url = self.latest_explorer_url or "https://amoy.polygonscan.com/"
         self.log(f"Membuka PolygonScan Amoy Explorer: {url}", "INFO")
         webbrowser.open(url)
+
+    # =========================================================================
+    # TAB 5: SECURITY, OPERATOR MANAGEMENT & BIOMETRIC ENROLLMENT
+    # =========================================================================
+    def _build_tab5_security(self) -> None:
+        container = ctk.CTkFrame(self.tab_security, fg_color="transparent")
+        container.pack(fill="both", expand=True, padx=8, pady=6)
+
+        header_card = HUDCard(
+            container,
+            title="AUTHENTICATION SECURITY & OPERATOR BIOMETRIC MANAGEMENT",
+            subtitle="Enroll Biometric Face Template to Database (Dual Cloud/Local Sync)",
+        )
+        header_card.pack(fill="x", pady=(0, 8))
+
+        main_row = ctk.CTkFrame(container, fg_color="transparent")
+        main_row.pack(fill="both", expand=True)
+
+        # Left Column: Webcam viewfinder for biometric capture
+        left_col = ctk.CTkFrame(
+            main_row,
+            fg_color=COLOR_SURFACE_DARK,
+            border_color=COLOR_BORDER,
+            border_width=1,
+            corner_radius=6,
+        )
+        left_col.pack(side="left", fill="both", expand=True, padx=(0, 6))
+
+        self.tab5_cam_label = ctk.CTkLabel(
+            left_col,
+            text="[ WEBCAM STANDBY ]\nClick 'START CAMERA' to begin biometric face registration",
+            font=get_mono_font(12, "bold"),
+            text_color=COLOR_TEXT_MUTED,
+            width=460,
+            height=280,
+        )
+        self.tab5_cam_label.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Right Column: Operator info and enrollment action
+        right_col = ctk.CTkFrame(
+            main_row,
+            fg_color=COLOR_SURFACE_DARK,
+            border_color=COLOR_BORDER,
+            border_width=1,
+            corner_radius=6,
+            width=380,
+        )
+        right_col.pack(side="right", fill="y", padx=(6, 0))
+        right_col.pack_propagate(False)
+
+        ctk.CTkLabel(
+            right_col,
+            text="ACTIVE CUSTODIAN PROFILE",
+            font=get_mono_font(12, "bold"),
+            text_color=COLOR_TEXT_PRIMARY,
+        ).pack(anchor="w", padx=14, pady=(12, 6))
+
+        self.lbl_tab5_status = StatusBadge(right_col, text="READY FOR ENROLLMENT", status="INFO")
+        self.lbl_tab5_status.pack(anchor="w", padx=14, pady=(0, 10))
+
+        self.txt_tab5_profile = ctk.CTkTextbox(
+            right_col,
+            height=120,
+            font=get_mono_font(11),
+            fg_color=COLOR_BASE,
+            border_color=COLOR_BORDER,
+            border_width=1,
+        )
+        self.txt_tab5_profile.pack(fill="x", padx=14, pady=(0, 10))
+        self._refresh_tab5_operator_info()
+
+        ctk.CTkButton(
+            right_col,
+            text="◉ START CAMERA",
+            font=get_mono_font(12, "bold"),
+            height=36,
+            fg_color=COLOR_PRIMARY,
+            hover_color=COLOR_PRIMARY_HOVER,
+            command=self._tab5_start_cam,
+        ).pack(fill="x", padx=14, pady=(0, 8))
+
+        ctk.CTkButton(
+            right_col,
+            text="📸 ENROLL WAJAH KE DATABASE",
+            font=get_mono_font(12, "bold"),
+            height=38,
+            fg_color=COLOR_EMERALD,
+            hover_color="#059669",
+            text_color="#052E16",
+            command=self._tab5_enroll_face,
+        ).pack(fill="x", padx=14, pady=(0, 8))
+
+        ctk.CTkButton(
+            right_col,
+            text="⏹ STOP CAMERA",
+            font=get_mono_font(11, "bold"),
+            height=32,
+            fg_color=COLOR_SURFACE,
+            hover_color=COLOR_BORDER,
+            command=self._tab5_stop_cam,
+        ).pack(fill="x", padx=14, pady=(0, 8))
+
+    def _refresh_tab5_operator_info(self) -> None:
+        serial = self.active_dongle.serial_number if self.active_dongle else os.getenv("LEXVAULT_DEFAULT_DONGLE_SERIAL", "LEXVAULT-DEV-DONGLE-001")
+        rec = self.db_manager.get_dongle(serial) or {}
+        has_face = bool(rec.get("face_profile_hash") and len(str(rec.get("face_profile_hash"))) > 64)
+        info = (
+            f"SERIAL NUMBER : {serial}\n"
+            f"OPERATOR      : {rec.get('operator_name', 'N/A')}\n"
+            f"BADGE ID      : {rec.get('badge_id', 'N/A')}\n"
+            f"BIOMETRIC     : {'ENROLLED (DATABASE ACTIVE)' if has_face else 'INITIAL PLACEHOLDER'}\n"
+            f"STORAGE       : {'SUPABASE + SQLITE' if self.db_manager.cloud_online else 'OFFLINE SQLITE'}"
+        )
+        self.txt_tab5_profile.configure(state="normal")
+        self.txt_tab5_profile.delete("1.0", "end")
+        self.txt_tab5_profile.insert("1.0", info)
+        self.txt_tab5_profile.configure(state="disabled")
+
+    def _tab5_start_cam(self) -> None:
+        if not OPENCV_AVAILABLE or cv2 is None:
+            self.log("OpenCV tidak tersedia pada sistem.", "ERROR")
+            self.lbl_tab5_status.set_status("OPENCV UNAVAILABLE", "DANGER")
+            return
+        if self._cam_running:
+            return
+        try:
+            self._cam_cap = cv2.VideoCapture(0)
+            if not self._cam_cap or not self._cam_cap.isOpened():
+                self._tab5_stop_cam()
+                self.lbl_tab5_status.set_status("CAMERA ERROR", "DANGER")
+                self.tab5_cam_label.configure(
+                    text="[ WEBCAM UNAVAILABLE OR PERMISSION DENIED ]\nPastikan izin kamera diberikan ke Terminal.",
+                    text_color=COLOR_CRIMSON,
+                )
+                return
+            self._cam_running = True
+            self.lbl_tab5_status.set_status("CAMERA ACTIVE - POSITION FACE", "INFO")
+            self._tab5_poll_frame()
+        except Exception as exc:
+            self.log(f"Error kamera Tab 5: {exc}", "ERROR")
+
+    def _tab5_poll_frame(self) -> None:
+        if not self._cam_running or self._cam_cap is None:
+            return
+        ret, frame = self._cam_cap.read()
+        if not ret or frame is None:
+            self._tab5_stop_cam()
+            return
+        self._last_raw_frame = frame.copy()
+        if self.auth_gate:
+            detected, ann, _, _ = self.auth_gate.detect_face_in_frame(frame)
+        else:
+            ann = frame
+
+        rgb = cv2.cvtColor(ann, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(rgb)
+        ctk_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(460, 280))
+        self._cam_ctk_image = ctk_img
+        self.tab5_cam_label.configure(image=ctk_img, text="")
+        self.after(25, self._tab5_poll_frame)
+
+    def _clear_tab5_camera_image(self) -> None:
+        """
+        Safely detaches CTkImage from tab5_cam_label without triggering
+        CustomTkinter's TclError ('pyimage doesn't exist').
+        """
+        try:
+            if isinstance(getattr(self.tab5_cam_label, "_image", None), ctk.CTkImage):
+                self.tab5_cam_label._image.remove_configure_callback(self.tab5_cam_label._update_image)
+            self.tab5_cam_label._image = None
+            if hasattr(self.tab5_cam_label, "_label") and self.tab5_cam_label._label is not None:
+                self.tab5_cam_label._label.configure(image="")
+        except Exception:
+            pass
+        self._cam_ctk_image = None
+
+    def _tab5_stop_cam(self) -> None:
+        self._cam_running = False
+        if self._cam_cap is not None:
+            try:
+                self._cam_cap.release()
+            except Exception:
+                pass
+            self._cam_cap = None
+        self._clear_tab5_camera_image()
+        self.tab5_cam_label.configure(text="[ WEBCAM STOPPED ]")
+
+    def _tab5_enroll_face(self) -> None:
+        if not self._cam_running or self._last_raw_frame is None:
+            self.log("Nyalakan kamera terlebih dahulu untuk mendaftarkan wajah.", "WARN")
+            self.lbl_tab5_status.set_status("START CAMERA FIRST", "WARN")
+            return
+        if not self.auth_gate:
+            return
+
+        serial = self.active_dongle.serial_number if self.active_dongle else os.getenv("LEXVAULT_DEFAULT_DONGLE_SERIAL", "LEXVAULT-DEV-DONGLE-001")
+        detected, _, _, bbox = self.auth_gate.detect_face_in_frame(self._last_raw_frame)
+        if not detected or bbox[2] < 30 or bbox[3] < 30:
+            self.log("Wajah tidak terdeteksi dengan jelas. Hadapkan wajah ke kamera.", "WARN")
+            self.lbl_tab5_status.set_status("FACE NOT CLEAR", "WARN")
+            return
+
+        ok, msg = self.auth_gate.enroll_face_profile(serial, self._last_raw_frame, bbox)
+        if ok:
+            self.log(f"Pendaftaran biometrik berhasil: {msg}", "SUCCESS")
+            self.lbl_tab5_status.set_status("BIOMETRIC ENROLLED & SAVED!", "SUCCESS")
+            self._refresh_tab5_operator_info()
+            self._tab5_stop_cam()
+        else:
+            self.log(f"Gagal mendaftarkan biometrik: {msg}", "ERROR")
+            self.lbl_tab5_status.set_status("ENROLL FAILED", "DANGER")
 

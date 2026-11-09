@@ -32,7 +32,13 @@ class Web3SyncWorker:
 
     CHAIN_ID = 80002
     EXPLORER_BASE = "https://amoy.polygonscan.com/tx/"
-    DEFAULT_RPC = "https://rpc-amoy.polygon.technology"
+    DEFAULT_RPC = "https://polygon-amoy-bor-rpc.publicnode.com"
+    FALLBACK_RPCS = [
+        "https://polygon-amoy-bor-rpc.publicnode.com",
+        "https://rpc.ankr.com/polygon_amoy",
+        "https://polygon-amoy.drpc.org",
+        "https://rpc-amoy.polygon.technology",
+    ]
 
     def __init__(
         self,
@@ -88,11 +94,34 @@ class Web3SyncWorker:
                 is_live_onchain=False,
             )
 
-        try:
-            w3 = Web3(HTTPProvider(self.rpc_url, request_kwargs={"timeout": 12}))
-            if not w3.is_connected():
-                raise ConnectionError(f"Tidak dapat terhubung ke RPC Polygon Amoy: {self.rpc_url}")
+        # Prepare list of candidate RPCs (configured RPC first, then fallback list)
+        candidate_rpcs = [self.rpc_url] + [u for u in self.FALLBACK_RPCS if u != self.rpc_url]
 
+        w3: Optional[Web3] = None
+        connected_rpc = None
+        for rpc in candidate_rpcs:
+            try:
+                headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
+                candidate_w3 = Web3(HTTPProvider(rpc, request_kwargs={"timeout": 10, "headers": headers}))
+                if candidate_w3.is_connected():
+                    w3 = candidate_w3
+                    connected_rpc = rpc
+                    break
+            except Exception:
+                continue
+
+        if w3 is None or not w3.is_connected():
+            err_msg = f"Tidak dapat terhubung ke RPC Polygon Amoy (mencoba {len(candidate_rpcs)} node)."
+            self._log(err_msg, "WARN")
+            return Web3AnchorResult(
+                success=False,
+                tx_hash="L2_RPC_OFFLINE",
+                explorer_url="https://amoy.polygonscan.com/",
+                message=err_msg,
+                is_live_onchain=False,
+            )
+
+        try:
             account = Account.from_key(self.private_key)
             sender_address = w3.to_checksum_address(account.address)
 

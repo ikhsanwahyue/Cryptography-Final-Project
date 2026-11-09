@@ -103,7 +103,7 @@ class LexVaultApp(ctk.CTk):
 
         ctk.CTkLabel(
             left_box,
-            text="🛡 LEXVAULT // FORENSIC CUSTODY TERMINAL",
+            text="LEXVAULT // FORENSIC CUSTODY TERMINAL",
             font=get_mono_font(15, "bold"),
             text_color=COLOR_TEXT_PRIMARY,
         ).pack(anchor="w")
@@ -164,9 +164,13 @@ class LexVaultApp(ctk.CTk):
                 db_manager=self.db_manager,
                 blockchain=self.blockchain,
                 web3_worker=self.web3_worker,
+                auth_gate=self.auth_gate,
+                active_dongle=dongle,
                 log_callback=self.threadsafe_log,
                 on_chain_status_change=self._on_chain_integrity_updated,
             )
+        else:
+            self.workspace_frame.active_dongle = dongle
 
         self.workspace_frame.pack(fill="both", expand=True)
         self.workspace_frame.refresh_audit_ledger()
