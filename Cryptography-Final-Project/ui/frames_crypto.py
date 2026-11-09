@@ -996,6 +996,26 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         ctk.CTkButton(
             right_col,
+            text="🔑 UBAH SANDI CUSTODIAN",
+            font=get_mono_font(11, "bold"),
+            height=34,
+            fg_color="#1E3A8A",
+            hover_color="#1D4ED8",
+            command=self._tab5_change_password_dialog,
+        ).pack(fill="x", padx=14, pady=(0, 8))
+
+        ctk.CTkButton(
+            right_col,
+            text="➕ TAMBAH USER / DONGLE BARU",
+            font=get_mono_font(11, "bold"),
+            height=34,
+            fg_color="#064E3B",
+            hover_color="#047857",
+            command=self._tab5_add_user_dialog,
+        ).pack(fill="x", padx=14, pady=(0, 8))
+
+        ctk.CTkButton(
+            right_col,
             text="⏹ STOP CAMERA",
             font=get_mono_font(11, "bold"),
             height=32,
@@ -1113,4 +1133,126 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         else:
             self.log(f"Gagal mendaftarkan biometrik: {msg}", "ERROR")
             self.lbl_tab5_status.set_status("ENROLL FAILED", "DANGER")
+
+    def _tab5_change_password_dialog(self) -> None:
+        serial = self.active_dongle.serial_number if self.active_dongle else os.getenv("LEXVAULT_DEFAULT_DONGLE_SERIAL", "LEXVAULT-DEV-DONGLE-001")
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("UBAH SANDI CUSTODIAN")
+        dialog.geometry("400x300")
+        dialog.minsize(360, 260)
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+
+        ctk.CTkLabel(dialog, text="UBAH SANDI MASTER DONGLE", font=get_mono_font(13, "bold")).pack(anchor="w", padx=20, pady=(16, 4))
+        ctk.CTkLabel(dialog, text=f"Target Token: {serial}", font=get_mono_font(11), text_color=COLOR_TEXT_MUTED).pack(anchor="w", padx=20, pady=(0, 12))
+
+        ctk.CTkLabel(dialog, text="Sandi Baru:", font=get_mono_font(11, "bold")).pack(anchor="w", padx=20)
+        entry_p1 = ctk.CTkEntry(dialog, placeholder_text="Masukkan sandi baru...", show="•", font=get_mono_font(11))
+        entry_p1.pack(fill="x", padx=20, pady=(2, 8))
+
+        ctk.CTkLabel(dialog, text="Konfirmasi Sandi Baru:", font=get_mono_font(11, "bold")).pack(anchor="w", padx=20)
+        entry_p2 = ctk.CTkEntry(dialog, placeholder_text="Ulangi sandi baru...", show="•", font=get_mono_font(11))
+        entry_p2.pack(fill="x", padx=20, pady=(2, 12))
+
+        lbl_err = ctk.CTkLabel(dialog, text="", font=get_mono_font(11), text_color=COLOR_CRIMSON)
+        lbl_err.pack(padx=20, pady=(0, 8))
+
+        def _save():
+            p1 = entry_p1.get().strip()
+            p2 = entry_p2.get().strip()
+            if not p1 or not p2:
+                lbl_err.configure(text="Sandi tidak boleh kosong!")
+                return
+            if p1 != p2:
+                lbl_err.configure(text="Konfirmasi sandi tidak cocok!")
+                return
+            if len(p1) < 6:
+                lbl_err.configure(text="Sandi minimal 6 karakter!")
+                return
+
+            salt_hex, pwd_hash = AuthGate.hash_password_with_new_salt(p1)
+            ok = self.db_manager.update_dongle_password(serial, salt_hex, pwd_hash)
+            if ok:
+                self.log(f"Sandi untuk dongle '{serial}' berhasil diperbarui di database.", "SUCCESS")
+                dialog.destroy()
+            else:
+                lbl_err.configure(text="Gagal menyimpan sandi ke database.")
+
+        btn_row = ctk.CTkFrame(dialog, fg_color="transparent")
+        btn_row.pack(fill="x", padx=20, pady=(4, 14))
+        ctk.CTkButton(btn_row, text="BATAL", width=80, fg_color=COLOR_SURFACE, hover_color=COLOR_BORDER, command=dialog.destroy, font=get_mono_font(11, "bold")).pack(side="left")
+        ctk.CTkButton(btn_row, text="💾 SIMPAN SANDI", fg_color=COLOR_EMERALD, hover_color="#059669", text_color="#052E16", command=_save, font=get_mono_font(11, "bold")).pack(side="right", fill="x", expand=True, padx=(10, 0))
+
+    def _tab5_add_user_dialog(self) -> None:
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("TAMBAH OPERATOR / DONGLE BARU")
+        dialog.geometry("480x420")
+        dialog.minsize(440, 380)
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+
+        ctk.CTkLabel(dialog, text="DAFTARKAN OPERATOR & USB DONGLE BARU", font=get_mono_font(13, "bold")).pack(anchor="w", padx=20, pady=(16, 4))
+        ctk.CTkLabel(dialog, text="Generate classified.key ke USB dan daftarkan ke database.", font=get_mono_font(11), text_color=COLOR_TEXT_MUTED).pack(anchor="w", padx=20, pady=(0, 12))
+
+        form = ctk.CTkFrame(dialog, fg_color="transparent")
+        form.pack(fill="x", padx=20)
+
+        ctk.CTkLabel(form, text="Folder Root USB Flash Drive:", font=get_mono_font(11, "bold")).pack(anchor="w")
+        p_row = ctk.CTkFrame(form, fg_color="transparent")
+        p_row.pack(fill="x", pady=(2, 8))
+        entry_p = ctk.CTkEntry(p_row, placeholder_text="Pilih folder USB...", font=get_mono_font(11))
+        entry_p.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ctk.CTkButton(p_row, text="📁 BROWSE", width=80, font=get_mono_font(11, "bold"), command=lambda: (
+            d := filedialog.askdirectory(title="Pilih Mount USB", parent=dialog),
+            entry_p.delete(0, "end"),
+            entry_p.insert(0, d) if d else None
+        )).pack(side="right")
+
+        ctk.CTkLabel(form, text="Nama Operator Baru:", font=get_mono_font(11, "bold")).pack(anchor="w")
+        entry_name = ctk.CTkEntry(form, placeholder_text="misal: Briptu Bintang Shada", font=get_mono_font(11))
+        entry_name.pack(fill="x", pady=(2, 8))
+
+        ctk.CTkLabel(form, text="Badge ID / NIP:", font=get_mono_font(11, "bold")).pack(anchor="w")
+        entry_badge = ctk.CTkEntry(form, placeholder_text="misal: DF-INA-99881", font=get_mono_font(11))
+        entry_badge.pack(fill="x", pady=(2, 8))
+
+        ctk.CTkLabel(form, text="Sandi Rahasia Operator:", font=get_mono_font(11, "bold")).pack(anchor="w")
+        entry_pwd = ctk.CTkEntry(form, placeholder_text="Setel password awal...", show="•", font=get_mono_font(11))
+        entry_pwd.pack(fill="x", pady=(2, 14))
+
+        lbl_msg = ctk.CTkLabel(dialog, text="", font=get_mono_font(11), text_color=COLOR_CRIMSON)
+        lbl_msg.pack(padx=20, pady=(0, 8))
+
+        def _do_add():
+            m = entry_p.get().strip()
+            n = entry_name.get().strip()
+            b = entry_badge.get().strip()
+            pw = entry_pwd.get().strip()
+            if not m or not Path(m).exists():
+                lbl_msg.configure(text="Pilih folder USB yang valid!")
+                return
+            if not n or not b or not pw:
+                lbl_msg.configure(text="Semua kolom wajib diisi!")
+                return
+            if len(pw) < 6:
+                lbl_msg.configure(text="Password minimal 6 karakter!")
+                return
+
+            if self.auth_gate:
+                ok, msg = self.auth_gate.provision_usb_drive(
+                    mount_path=m,
+                    operator_name=n,
+                    badge_id=b,
+                    password=pw,
+                )
+                self.log(msg, "SUCCESS" if ok else "ERROR")
+                if ok:
+                    dialog.destroy()
+                else:
+                    lbl_msg.configure(text=msg)
+
+        b_row = ctk.CTkFrame(dialog, fg_color="transparent")
+        b_row.pack(fill="x", padx=20, pady=(4, 16))
+        ctk.CTkButton(b_row, text="BATAL", width=80, fg_color=COLOR_SURFACE, hover_color=COLOR_BORDER, command=dialog.destroy, font=get_mono_font(11, "bold")).pack(side="left")
+        ctk.CTkButton(b_row, text="💾 BUAT & DAFTARKAN DONGLE", fg_color=COLOR_EMERALD, hover_color="#059669", text_color="#052E16", command=_do_add, font=get_mono_font(11, "bold")).pack(side="right", fill="x", expand=True, padx=(10, 0))
 

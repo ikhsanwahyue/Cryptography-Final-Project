@@ -222,17 +222,96 @@ class AuthWizardFrame(ctk.CTkFrame):
         self.refresh_usb_status()
 
     def _provision_usb_dialog(self) -> None:
-        folder = filedialog.askdirectory(title="Select Mounted USB Flash Drive Root Directory")
-        if not folder:
-            return
-        ok, msg = self.auth_gate.provision_usb_drive(
-            mount_path=folder,
-            operator_name="Kompol. Dr. Aris Prakoso, M.Si (Forensik)",
-            badge_id="DF-INA-88219",
-            password="LexVault#2026",
-        )
-        self.log(msg, "SUCCESS" if ok else "ERROR")
-        self.refresh_usb_status()
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("SETUP NEW FORENSIC USB DONGLE")
+        dialog.geometry("480x420")
+        dialog.minsize(440, 380)
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+
+        ctk.CTkLabel(
+            dialog,
+            text="PROVISION NEW OPERATOR USB DONGLE",
+            font=get_mono_font(13, "bold"),
+            text_color=COLOR_TEXT_PRIMARY,
+        ).pack(anchor="w", padx=20, pady=(16, 4))
+
+        ctk.CTkLabel(
+            dialog,
+            text="Daftarkan USB Flash Drive fisik dan setel sandi awal operator.",
+            font=get_mono_font(11),
+            text_color=COLOR_TEXT_MUTED,
+        ).pack(anchor="w", padx=20, pady=(0, 14))
+
+        form_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        form_frame.pack(fill="x", padx=20)
+
+        # 1. Target Mount Path
+        ctk.CTkLabel(form_frame, text="USB Flash Drive Mount Directory:", font=get_mono_font(11, "bold")).pack(anchor="w")
+        path_row = ctk.CTkFrame(form_frame, fg_color="transparent")
+        path_row.pack(fill="x", pady=(2, 10))
+        entry_path = ctk.CTkEntry(path_row, placeholder_text="Pilih folder root USB...", font=get_mono_font(11))
+        entry_path.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        def _browse():
+            d = filedialog.askdirectory(title="Pilih Root Flash Drive USB", parent=dialog)
+            if d:
+                entry_path.delete(0, "end")
+                entry_path.insert(0, d)
+
+        ctk.CTkButton(path_row, text="📁 BROWSE", width=80, command=_browse, font=get_mono_font(11, "bold")).pack(side="right")
+
+        # 2. Operator Name
+        ctk.CTkLabel(form_frame, text="Nama Operator / Penyidik:", font=get_mono_font(11, "bold")).pack(anchor="w")
+        entry_name = ctk.CTkEntry(form_frame, placeholder_text="misal: Bintang Shada, S.Kom", font=get_mono_font(11))
+        entry_name.pack(fill="x", pady=(2, 10))
+
+        # 3. Badge ID
+        ctk.CTkLabel(form_frame, text="Badge ID / NIP:", font=get_mono_font(11, "bold")).pack(anchor="w")
+        entry_badge = ctk.CTkEntry(form_frame, placeholder_text="misal: POL-FORENSIK-01", font=get_mono_font(11))
+        entry_badge.pack(fill="x", pady=(2, 10))
+
+        # 4. Password
+        ctk.CTkLabel(form_frame, text="Sandi Rahasia Custodian:", font=get_mono_font(11, "bold")).pack(anchor="w")
+        entry_pwd = ctk.CTkEntry(form_frame, placeholder_text="Masukkan password kuat...", show="•", font=get_mono_font(11))
+        entry_pwd.pack(fill="x", pady=(2, 16))
+
+        lbl_status = ctk.CTkLabel(dialog, text="", font=get_mono_font(11), text_color=COLOR_AMBER)
+        lbl_status.pack(padx=20, pady=(0, 10))
+
+        def _execute_provision():
+            mount = entry_path.get().strip()
+            name = entry_name.get().strip()
+            badge = entry_badge.get().strip()
+            pwd = entry_pwd.get().strip()
+
+            if not mount or not Path(mount).exists():
+                lbl_status.configure(text="Pilih direktori mount USB yang valid!", text_color=COLOR_CRIMSON)
+                return
+            if not name or not badge or not pwd:
+                lbl_status.configure(text="Semua kolom nama, badge, dan sandi wajib diisi!", text_color=COLOR_CRIMSON)
+                return
+            if len(pwd) < 6:
+                lbl_status.configure(text="Sandi minimal 6 karakter demi keamanan!", text_color=COLOR_CRIMSON)
+                return
+
+            ok, msg = self.auth_gate.provision_usb_drive(
+                mount_path=mount,
+                operator_name=name,
+                badge_id=badge,
+                password=pwd,
+            )
+            self.log(msg, "SUCCESS" if ok else "ERROR")
+            if ok:
+                dialog.destroy()
+                self.refresh_usb_status()
+            else:
+                lbl_status.configure(text=msg, text_color=COLOR_CRIMSON)
+
+        btn_row = ctk.CTkFrame(dialog, fg_color="transparent")
+        btn_row.pack(fill="x", padx=20, pady=(0, 16))
+        ctk.CTkButton(btn_row, text="BATAL", width=90, fg_color=COLOR_SURFACE, hover_color=COLOR_BORDER, command=dialog.destroy, font=get_mono_font(11, "bold")).pack(side="left")
+        ctk.CTkButton(btn_row, text="💾 BUAT DONGLE & DAFTARKAN", fg_color=COLOR_EMERALD, hover_color="#059669", text_color="#052E16", command=_execute_provision, font=get_mono_font(11, "bold")).pack(side="right", fill="x", expand=True, padx=(10, 0))
 
     def refresh_usb_status(self) -> None:
         status = self.auth_gate.scan_hardware_dongle()
@@ -523,7 +602,7 @@ class AuthWizardFrame(ctk.CTkFrame):
 
         ctk.CTkLabel(
             card,
-            text="ENTER CUSTODIAN MASTER PASSPHRASE (Default: LexVault#2026)",
+            text="ENTER CUSTODIAN MASTER PASSPHRASE",
             font=get_mono_font(12, "bold"),
             text_color=COLOR_TEXT_PRIMARY,
         ).pack(anchor="w", padx=18, pady=(14, 6))
@@ -533,7 +612,7 @@ class AuthWizardFrame(ctk.CTkFrame):
 
         self.pwd_entry = ctk.CTkEntry(
             entry_row,
-            placeholder_text="Masukkan Master Passphrase...",
+            placeholder_text="Masukkan Sandi Custodian...",
             show="•",
             height=40,
             font=get_mono_font(13, "bold"),
@@ -541,7 +620,6 @@ class AuthWizardFrame(ctk.CTkFrame):
             border_color=COLOR_BORDER,
         )
         self.pwd_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        self.pwd_entry.insert(0, "LexVault#2026")
         self.pwd_entry.bind("<Return>", lambda _e: self._verify_stage3_password())
 
         self.btn_unlock_vault = ctk.CTkButton(
