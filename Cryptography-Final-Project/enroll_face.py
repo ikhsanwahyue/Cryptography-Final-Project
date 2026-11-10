@@ -19,21 +19,21 @@ import cv2
 from database.db_manager import DatabaseManager
 from core.auth_gate import AuthGate
 
-def enroll_from_webcam(serial_number: str = "LEXVAULT-DEV-DONGLE-001"):
+def enroll_from_webcam(serial_number: str = "LXV-USB-484BC196"):
     print("=" * 65)
-    print("  LEXVAULT - BIOMETRIC FACE ENROLLMENT TOOL")
+    print("  LEXVAULT - BIOMETRIC FACE ENROLLMENT TOOL (SUPABASE + SQLITE)")
     print(f"  Target Dongle / Operator: {serial_number}")
     print("=" * 65)
     print("\n[1/3] Menyalakan webcam...")
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        print("[ERROR] Kamera tidak dapat dibuka. Pastikan izin kamera aktif.")
+        print("[ERROR] Kamera tidak dapat dibuka. Pastikan izin kamera aktif di System Settings.")
         return False
 
     db = DatabaseManager()
     gate = AuthGate(db_manager=db)
 
-    print("[2/3] Kamera aktif! Hadapkan wajah ke kamera.")
+    print("[2/3] Kamera aktif! Hadapkan wajah ke kamera (tanpa masker).")
     print("      Tekan tombol [SPASI] di jendela kamera untuk AMBIL FOTO & DAFTAR.")
     print("      Tekan tombol [ESC] atau [Q] untuk batal.\n")
 
@@ -44,18 +44,22 @@ def enroll_from_webcam(serial_number: str = "LEXVAULT-DEV-DONGLE-001"):
             continue
 
         detected, annotated, _, bbox = gate.detect_face_in_frame(frame)
+        is_masked, _ = gate.is_face_masked(frame, bbox) if detected else (False, 1.0)
 
         # Tampilkan petunjuk di layar preview
         h, w = annotated.shape[:2]
-        if detected:
+        if is_masked:
+            status_text = "MASKER TERDETEKSI! Lepas masker untuk mendaftar"
+            color = (0, 0, 255) # Red
+        elif detected:
             status_text = "WAJAH TERKUNCI! Tekan [SPASI] untuk Mendaftar"
-            color = (0, 255, 0)
+            color = (0, 255, 0) # Green
         else:
             status_text = "Mencari wajah... Hadapkan wajah ke kamera"
-            color = (0, 165, 255)
+            color = (0, 165, 255) # Amber
 
         cv2.putText(annotated, status_text, (20, h - 25), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2)
-        cv2.imshow("LexVault - Pendaftaran Wajah (Tekan SPASI)", annotated)
+        cv2.imshow(f"LexVault - Pendaftaran Wajah ({serial_number})", annotated)
 
         key = cv2.waitKey(20) & 0xFF
         if key in (27, ord('q'), ord('Q')):
@@ -65,11 +69,16 @@ def enroll_from_webcam(serial_number: str = "LEXVAULT-DEV-DONGLE-001"):
             if not detected or bbox[2] < 30:
                 print("[WARN] Wajah belum terdeteksi jelas! Posisikan wajah di tengah kamera.")
                 continue
+            if is_masked:
+                print("[WARN] MASKER TERDETEKSI! Harap lepas masker wajah Anda sebelum mengambil foto.")
+                continue
 
             print("[3/3] Memproses dan menyimpan biometrik ke database...")
             ok, msg = gate.enroll_face_profile(serial_number, frame, bbox)
             if ok:
                 print(f"\n[SUKSES] {msg}")
+                cloud_status = "YA (Tersimpan Online)" if db.cloud_online else "OFFLINE (SQLite Lokal)"
+                print(f"[STATUS CLOUD] Supabase Cloud Sync: {cloud_status}")
                 # Update seeder file juga
                 vector_hex = gate.extract_face_feature_vector(frame, bbox)
                 if vector_hex:
@@ -85,7 +94,7 @@ def enroll_from_webcam(serial_number: str = "LEXVAULT-DEV-DONGLE-001"):
     cv2.destroyAllWindows()
     return enrolled
 
-def enroll_from_image_file(image_path: str, serial_number: str = "LEXVAULT-DEV-DONGLE-001"):
+def enroll_from_image_file(image_path: str, serial_number: str = "LXV-USB-484BC196"):
     p = Path(image_path)
     if not p.exists():
         print(f"[ERROR] File foto '{image_path}' tidak ditemukan.")
@@ -103,9 +112,16 @@ def enroll_from_image_file(image_path: str, serial_number: str = "LEXVAULT-DEV-D
         print("[ERROR] Wajah tidak terdeteksi di foto tersebut.")
         return False
 
+    is_masked, _ = gate.is_face_masked(frame, bbox)
+    if is_masked:
+        print("[ERROR] Wajah pada foto terdeteksi memakai masker! Gunakan foto tanpa masker.")
+        return False
+
     ok, msg = gate.enroll_face_profile(serial_number, frame, bbox)
     if ok:
         print(f"[SUKSES] Foto '{p.name}' berhasil didaftarkan ke database untuk {serial_number}!")
+        cloud_status = "YA (Tersimpan Online)" if db.cloud_online else "OFFLINE (SQLite Lokal)"
+        print(f"[STATUS CLOUD] Supabase Cloud Sync: {cloud_status}")
         vec = gate.extract_face_feature_vector(frame, bbox)
         if vec:
             Path("database/default_face_seed.hex").write_text(vec)
@@ -116,7 +132,14 @@ def enroll_from_image_file(image_path: str, serial_number: str = "LEXVAULT-DEV-D
         return False
 
 if __name__ == "__main__":
-    serial = os.getenv("LEXVAULT_DEFAULT_DONGLE_SERIAL", "LEXVAULT-DEV-DONGLE-001")
+    db = DatabaseManager()
+    gate = AuthGate(db_manager=db)
+    detected_dongle = gate.scan_hardware_dongle()
+    if detected_dongle.connected and detected_dongle.serial_number not in ("NONE", "CORRUPTED-TOKEN"):
+        serial = detected_dongle.serial_number
+    else:
+        serial = os.getenv("LEXVAULT_DEFAULT_DONGLE_SERIAL", "LXV-USB-484BC196")
+
     if len(sys.argv) > 1 and sys.argv[1].endswith(('.png', '.jpg', '.jpeg')):
         enroll_from_image_file(sys.argv[1], serial)
     else:

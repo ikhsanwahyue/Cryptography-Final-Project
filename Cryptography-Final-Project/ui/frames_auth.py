@@ -223,9 +223,9 @@ class AuthWizardFrame(ctk.CTkFrame):
 
     def _provision_usb_dialog(self) -> None:
         dialog = ctk.CTkToplevel(self)
-        dialog.title("SETUP NEW FORENSIC USB DONGLE")
-        dialog.geometry("480x420")
-        dialog.minsize(440, 380)
+        dialog.title("SETUP NEW FORENSIC USB DONGLE & OPERATOR ENROLLMENT")
+        dialog.geometry("520x680")
+        dialog.minsize(480, 620)
         dialog.transient(self.winfo_toplevel())
         dialog.grab_set()
 
@@ -234,22 +234,22 @@ class AuthWizardFrame(ctk.CTkFrame):
             text="PROVISION NEW OPERATOR USB DONGLE",
             font=get_mono_font(13, "bold"),
             text_color=COLOR_TEXT_PRIMARY,
-        ).pack(anchor="w", padx=20, pady=(16, 4))
+        ).pack(anchor="w", padx=20, pady=(14, 2))
 
         ctk.CTkLabel(
             dialog,
-            text="Daftarkan USB Flash Drive fisik dan setel sandi awal operator.",
+            text="Pendaftaran USB token fisik, biometrik wajah, dan sandi kustodian.",
             font=get_mono_font(11),
             text_color=COLOR_TEXT_MUTED,
-        ).pack(anchor="w", padx=20, pady=(0, 14))
+        ).pack(anchor="w", padx=20, pady=(0, 10))
 
-        form_frame = ctk.CTkFrame(dialog, fg_color="transparent")
-        form_frame.pack(fill="x", padx=20)
+        scroll = ctk.CTkScrollableFrame(dialog, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=14, pady=(0, 10))
 
         # 1. Target Mount Path
-        ctk.CTkLabel(form_frame, text="USB Flash Drive Mount Directory:", font=get_mono_font(11, "bold")).pack(anchor="w")
-        path_row = ctk.CTkFrame(form_frame, fg_color="transparent")
-        path_row.pack(fill="x", pady=(2, 10))
+        ctk.CTkLabel(scroll, text="1. USB Flash Drive Mount Directory:", font=get_mono_font(11, "bold")).pack(anchor="w")
+        path_row = ctk.CTkFrame(scroll, fg_color="transparent")
+        path_row.pack(fill="x", pady=(2, 8))
         entry_path = ctk.CTkEntry(path_row, placeholder_text="Pilih folder root USB...", font=get_mono_font(11))
         entry_path.pack(side="left", fill="x", expand=True, padx=(0, 8))
 
@@ -262,28 +262,160 @@ class AuthWizardFrame(ctk.CTkFrame):
         ctk.CTkButton(path_row, text="📁 BROWSE", width=80, command=_browse, font=get_mono_font(11, "bold")).pack(side="right")
 
         # 2. Operator Name
-        ctk.CTkLabel(form_frame, text="Nama Operator / Penyidik:", font=get_mono_font(11, "bold")).pack(anchor="w")
-        entry_name = ctk.CTkEntry(form_frame, placeholder_text="misal: Bintang Shada, S.Kom", font=get_mono_font(11))
-        entry_name.pack(fill="x", pady=(2, 10))
+        ctk.CTkLabel(scroll, text="2. Nama Operator / Penyidik:", font=get_mono_font(11, "bold")).pack(anchor="w")
+        entry_name = ctk.CTkEntry(scroll, placeholder_text="misal: Bintang Shada, S.Kom", font=get_mono_font(11))
+        entry_name.pack(fill="x", pady=(2, 8))
 
         # 3. Badge ID
-        ctk.CTkLabel(form_frame, text="Badge ID / NIP:", font=get_mono_font(11, "bold")).pack(anchor="w")
-        entry_badge = ctk.CTkEntry(form_frame, placeholder_text="misal: POL-FORENSIK-01", font=get_mono_font(11))
-        entry_badge.pack(fill="x", pady=(2, 10))
+        ctk.CTkLabel(scroll, text="3. Badge ID / NIP:", font=get_mono_font(11, "bold")).pack(anchor="w")
+        entry_badge = ctk.CTkEntry(scroll, placeholder_text="misal: POL-FORENSIK-01", font=get_mono_font(11))
+        entry_badge.pack(fill="x", pady=(2, 8))
 
         # 4. Password
-        ctk.CTkLabel(form_frame, text="Sandi Rahasia Custodian:", font=get_mono_font(11, "bold")).pack(anchor="w")
-        entry_pwd = ctk.CTkEntry(form_frame, placeholder_text="Masukkan password kuat...", show="•", font=get_mono_font(11))
-        entry_pwd.pack(fill="x", pady=(2, 16))
+        ctk.CTkLabel(scroll, text="4. Sandi Rahasia Custodian:", font=get_mono_font(11, "bold")).pack(anchor="w")
+        entry_pwd = ctk.CTkEntry(scroll, placeholder_text="Masukkan password kuat...", show="•", font=get_mono_font(11))
+        entry_pwd.pack(fill="x", pady=(2, 10))
+
+        # 5. Biometric Face Capture
+        ctk.CTkLabel(scroll, text="5. Rekam Biometrik Wajah Operator (Wajib):", font=get_mono_font(11, "bold")).pack(anchor="w")
+        
+        cam_box = ctk.CTkFrame(scroll, fg_color=COLOR_SURFACE_DARK, border_color=COLOR_BORDER, border_width=1, corner_radius=6)
+        cam_box.pack(fill="x", pady=(4, 8))
+
+        cam_preview = ctk.CTkLabel(
+            cam_box,
+            text="[ KAMERA STANDBY ]\nKlik 'NYALAKAN KAMERA' untuk merekam wajah operator",
+            font=get_mono_font(11, "bold"),
+            text_color=COLOR_TEXT_MUTED,
+            height=180,
+        )
+        cam_preview.pack(fill="x", padx=8, pady=8)
+
+        bio_state = {
+            "cap": None,
+            "running": False,
+            "after_id": None,
+            "last_frame": None,
+            "captured_vector": None,
+            "ctk_img": None,
+        }
+
+        lbl_face_status = ctk.CTkLabel(
+            scroll,
+            text="⚠️ STATUS BIOMETRIK: BELUM DIAMBIL (WAJIB)",
+            font=get_mono_font(11, "bold"),
+            text_color=COLOR_AMBER,
+        )
+        lbl_face_status.pack(anchor="w", pady=(0, 6))
+
+        def _stop_dialog_cam():
+            bio_state["running"] = False
+            if bio_state["after_id"]:
+                try:
+                    dialog.after_cancel(bio_state["after_id"])
+                except Exception:
+                    pass
+                bio_state["after_id"] = None
+            if bio_state["cap"] is not None:
+                try:
+                    bio_state["cap"].release()
+                except Exception:
+                    pass
+                bio_state["cap"] = None
+            try:
+                if hasattr(cam_preview, "_label") and cam_preview._label is not None:
+                    cam_preview._label.configure(image="")
+            except Exception:
+                pass
+            bio_state["ctk_img"] = None
+
+        def _poll_dialog_cam():
+            if not bio_state["running"] or bio_state["cap"] is None:
+                return
+            ret, frame = bio_state["cap"].read()
+            if not ret or frame is None:
+                _stop_dialog_cam()
+                return
+
+            bio_state["last_frame"] = frame.copy()
+            detected, ann, _, _ = self.auth_gate.detect_face_in_frame(frame)
+            rgb = cv2.cvtColor(ann, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(rgb)
+            ctk_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(320, 180))
+            bio_state["ctk_img"] = ctk_img
+            cam_preview.configure(image=ctk_img, text="")
+            bio_state["after_id"] = dialog.after(30, _poll_dialog_cam)
+
+        def _start_dialog_cam():
+            if not OPENCV_AVAILABLE or cv2 is None:
+                lbl_face_status.configure(text="OpenCV tidak tersedia pada sistem!", text_color=COLOR_CRIMSON)
+                return
+            if bio_state["running"]:
+                return
+            try:
+                bio_state["cap"] = cv2.VideoCapture(0)
+                if not bio_state["cap"] or not bio_state["cap"].isOpened():
+                    _stop_dialog_cam()
+                    lbl_face_status.configure(text="Kamera tidak dapat diakses! Berikan izin kamera.", text_color=COLOR_CRIMSON)
+                    return
+                bio_state["running"] = True
+                lbl_face_status.configure(text="◉ KAMERA AKTIF: Posisikan wajah di tengah...", text_color=COLOR_PRIMARY)
+                _poll_dialog_cam()
+            except Exception as exc:
+                lbl_face_status.configure(text=f"Error kamera: {exc}", text_color=COLOR_CRIMSON)
+
+        def _capture_dialog_face():
+            if not bio_state["running"] or bio_state["last_frame"] is None:
+                lbl_face_status.configure(text="Nyalakan kamera terlebih dahulu!", text_color=COLOR_CRIMSON)
+                return
+            detected, _, _, bbox = self.auth_gate.detect_face_in_frame(bio_state["last_frame"])
+            if not detected or bbox[2] < 30 or bbox[3] < 30:
+                lbl_face_status.configure(text="Wajah belum terdeteksi jelas! Dekatkan wajah.", text_color=COLOR_CRIMSON)
+                return
+
+            vec = self.auth_gate.extract_face_feature_vector(bio_state["last_frame"], bbox)
+            if not vec:
+                lbl_face_status.configure(text="Gagal mengekstrak vektor biometrik wajah!", text_color=COLOR_CRIMSON)
+                return
+
+            bio_state["captured_vector"] = vec
+            lbl_face_status.configure(
+                text=f"✓ WAJAH OPERATOR TERKUNCI & TERDAFTAR [{bbox[2]}x{bbox[3]}px]",
+                text_color=COLOR_EMERALD,
+            )
+            _stop_dialog_cam()
+            cam_preview.configure(text="[ FOTO WAJAH BERHASIL DIAMBIL & TERKUNCI ]", text_color=COLOR_EMERALD)
+
+        cam_btn_row = ctk.CTkFrame(scroll, fg_color="transparent")
+        cam_btn_row.pack(fill="x", pady=(0, 10))
+        ctk.CTkButton(
+            cam_btn_row,
+            text="◉ NYALAKAN KAMERA",
+            width=140,
+            fg_color=COLOR_PRIMARY,
+            hover_color=COLOR_PRIMARY_HOVER,
+            command=_start_dialog_cam,
+            font=get_mono_font(11, "bold"),
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            cam_btn_row,
+            text="📸 AMBIL FOTO WAJAH",
+            fg_color=COLOR_EMERALD,
+            hover_color="#059669",
+            text_color="#052E16",
+            command=_capture_dialog_face,
+            font=get_mono_font(11, "bold"),
+        ).pack(side="right", fill="x", expand=True)
 
         lbl_status = ctk.CTkLabel(dialog, text="", font=get_mono_font(11), text_color=COLOR_AMBER)
-        lbl_status.pack(padx=20, pady=(0, 10))
+        lbl_status.pack(padx=20, pady=(2, 6))
 
         def _execute_provision():
             mount = entry_path.get().strip()
             name = entry_name.get().strip()
             badge = entry_badge.get().strip()
             pwd = entry_pwd.get().strip()
+            face_vec = bio_state.get("captured_vector")
 
             if not mount or not Path(mount).exists():
                 lbl_status.configure(text="Pilih direktori mount USB yang valid!", text_color=COLOR_CRIMSON)
@@ -294,12 +426,17 @@ class AuthWizardFrame(ctk.CTkFrame):
             if len(pwd) < 6:
                 lbl_status.configure(text="Sandi minimal 6 karakter demi keamanan!", text_color=COLOR_CRIMSON)
                 return
+            if not face_vec:
+                lbl_status.configure(text="Wajah operator wajib direkam sebelum mendaftarkan USB!", text_color=COLOR_CRIMSON)
+                return
 
+            _stop_dialog_cam()
             ok, msg = self.auth_gate.provision_usb_drive(
                 mount_path=mount,
                 operator_name=name,
                 badge_id=badge,
                 password=pwd,
+                face_profile_hash=face_vec,
             )
             self.log(msg, "SUCCESS" if ok else "ERROR")
             if ok:
@@ -308,10 +445,32 @@ class AuthWizardFrame(ctk.CTkFrame):
             else:
                 lbl_status.configure(text=msg, text_color=COLOR_CRIMSON)
 
+        def _on_close():
+            _stop_dialog_cam()
+            dialog.destroy()
+
+        dialog.protocol("WM_DELETE_WINDOW", _on_close)
+
         btn_row = ctk.CTkFrame(dialog, fg_color="transparent")
-        btn_row.pack(fill="x", padx=20, pady=(0, 16))
-        ctk.CTkButton(btn_row, text="BATAL", width=90, fg_color=COLOR_SURFACE, hover_color=COLOR_BORDER, command=dialog.destroy, font=get_mono_font(11, "bold")).pack(side="left")
-        ctk.CTkButton(btn_row, text="💾 BUAT DONGLE & DAFTARKAN", fg_color=COLOR_EMERALD, hover_color="#059669", text_color="#052E16", command=_execute_provision, font=get_mono_font(11, "bold")).pack(side="right", fill="x", expand=True, padx=(10, 0))
+        btn_row.pack(fill="x", padx=20, pady=(4, 14))
+        ctk.CTkButton(
+            btn_row,
+            text="BATAL",
+            width=90,
+            fg_color=COLOR_SURFACE,
+            hover_color=COLOR_BORDER,
+            command=_on_close,
+            font=get_mono_font(11, "bold"),
+        ).pack(side="left")
+        ctk.CTkButton(
+            btn_row,
+            text="💾 BUAT DONGLE & DAFTARKAN",
+            fg_color=COLOR_EMERALD,
+            hover_color="#059669",
+            text_color="#052E16",
+            command=_execute_provision,
+            font=get_mono_font(11, "bold"),
+        ).pack(side="right", fill="x", expand=True, padx=(10, 0))
 
     def refresh_usb_status(self) -> None:
         status = self.auth_gate.scan_hardware_dongle()
@@ -515,29 +674,46 @@ class AuthWizardFrame(ctk.CTkFrame):
         self._cam_ctk_image = ctk_img
         self.camera_label.configure(image=ctk_img, text="")
 
-        # Check face match against enrolled profile if available
+        # Check face match against enrolled profile
         is_matched = False
         similarity_pct = 0.0
+        face_status_msg = "SEARCHING FACE..."
+        face_status_mode = "WARN"
+
         if detected and self.verified_dongle:
-            rec = self.auth_gate.db_manager.get_dongle(self.verified_dongle.serial_number) or {}
-            stored_hash = str(rec.get("face_profile_hash") or "").strip()
-            cand_vec = self.auth_gate.extract_face_feature_vector(frame, bbox)
-            if cand_vec and stored_hash:
-                is_matched, similarity_pct = self.auth_gate.compare_face_feature(cand_vec, stored_hash)
-            elif detected:
-                # Fallback if no specific template enrolled yet
-                is_matched = True
-                similarity_pct = 100.0
+            is_masked, _ = self.auth_gate.is_face_masked(frame, bbox)
+            if is_masked:
+                is_matched = False
+                face_status_msg = "⚠️ MASKER TERDETEKSI! HARAP LEPAS MASKER"
+                face_status_mode = "DANGER"
+            else:
+                rec = self.auth_gate.db_manager.get_dongle(self.verified_dongle.serial_number) or {}
+                stored_hash = str(rec.get("face_profile_hash") or "").strip()
+
+                if not stored_hash or stored_hash in ("EMPTY", "NONE", "") or len(stored_hash) < 30:
+                    is_matched = False
+                    face_status_msg = "PROFIL WAJAH BELUM TERDAFTAR PADA TOKEN!"
+                    face_status_mode = "DANGER"
+                else:
+                    cand_vec = self.auth_gate.extract_face_feature_vector(frame, bbox)
+                    if cand_vec:
+                        is_matched, similarity_pct = self.auth_gate.compare_face_feature(cand_vec, stored_hash)
+                        if is_matched:
+                            face_status_msg = f"OPERATOR TERVERIFIKASI ({similarity_pct:.0f}%)"
+                            face_status_mode = "INFO"
+                        else:
+                            face_status_msg = f"WAJAH TIDAK COCOK / UNAUTHORIZED ({similarity_pct:.0f}%)"
+                            face_status_mode = "DANGER"
+        elif not detected:
+            face_status_msg = "SEARCHING FACE... HADAPKAN KE KAMERA"
+            face_status_mode = "WARN"
 
         if detected and is_matched:
             self._face_lock_counter = min(self._required_face_frames, self._face_lock_counter + 1)
-            self.lbl_bio_status.set_status(f"MATCHING FACE ({similarity_pct:.0f}%)", "INFO")
-        elif detected and not is_matched:
-            self._face_lock_counter = max(0, self._face_lock_counter - 1)
-            self.lbl_bio_status.set_status(f"UNAUTHORIZED FACE ({similarity_pct:.0f}%)", "DANGER")
+            self.lbl_bio_status.set_status(face_status_msg, face_status_mode)
         else:
             self._face_lock_counter = max(0, self._face_lock_counter - 1)
-            self.lbl_bio_status.set_status("SEARCHING FACE...", "WARN")
+            self.lbl_bio_status.set_status(face_status_msg, face_status_mode)
 
         ratio = self._face_lock_counter / float(self._required_face_frames)
         self.bio_progress.set(ratio)
@@ -735,10 +911,28 @@ class AuthWizardFrame(ctk.CTkFrame):
             self._populate_stage3_telemetry()
 
     def reset_for_lockdown(self, reason: str = "") -> None:
-        """Called when the Hardware Kill-Switch or manual Lock triggers."""
+        """Called when the Hardware Kill-Switch or manual Lock triggers. Clears all credentials."""
         self.stop_webcam()
         self.verified_dongle = None
         self.biometric_verified = False
+        self._face_lock_counter = 0
+        self._last_raw_frame = None
+
+        # Reset Face UI & Camera
+        self._clear_camera_label_image()
+        self.bio_progress.set(0.0)
+        self.lbl_bio_progress_text.configure(text="Consecutive Face Lock: 0 / 6 frames")
+        self.lbl_bio_status.set_status("AWAITING BIOMETRIC LOCK", "WARN")
+        self.btn_next_step3.configure(state="disabled")
+
+        # Reset Password UI
+        self.pwd_entry.delete(0, "end")
+        self.lbl_pwd_status.set_status("READY FOR SALTED SHA-256 CHECK", "INFO")
+        self.hash_inspector.configure(state="normal")
+        self.hash_inspector.delete("1.0", "end")
+        self.hash_inspector.configure(state="disabled")
+
+        # Reset USB & Badges
         self.dev_dongle_var.set(self.auth_gate.dev_dongle_enabled)
         self.badge_step1.set_status("STAGE 1: USB LOCKED", "DANGER")
         self.badge_step2.set_status("STAGE 2: BIOMETRIC RESET", "WARN")

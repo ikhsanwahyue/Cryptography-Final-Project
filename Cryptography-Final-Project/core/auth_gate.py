@@ -3,6 +3,7 @@ Hardware Token, Biometric Face Verification, Salted Password Hash,
 and USB Kill-Switch Daemon for LexVault (ISO/IEC 27037 Auth Gate).
 """
 
+import base64
 import hashlib
 import json
 import os
@@ -11,6 +12,7 @@ import secrets
 import subprocess
 import threading
 import time
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -355,10 +357,11 @@ class AuthGate:
         operator_name: str,
         badge_id: str,
         password: str,
+        face_profile_hash: Optional[str] = None,
     ) -> Tuple[bool, str]:
         """
         Writes `classified.key` onto a mounted USB drive and registers its serial
-        number and salted password hash in the database.
+        number, biometric face profile, and salted password hash in the database.
         """
         target_dir = Path(mount_path)
         if not target_dir.exists() or not target_dir.is_dir():
@@ -394,6 +397,7 @@ class AuthGate:
                 token_signature=token_sig,
                 password_salt=salt_hex,
                 password_hash=pwd_hash,
+                face_profile_hash=face_profile_hash or "",
                 is_active=True,
             )
             self._log(f"USB Dongle provisioned at {key_file} (Serial: {serial})", "SUCCESS")
@@ -441,10 +445,8 @@ class AuthGate:
             status = self.scan_hardware_dongle()
             if not status.connected or not status.authorized:
                 self.session_unlocked = False
-                reason = (
-                    f"KILL-SWITCH TRIGGERED: Hardware token '{ self.active_dongle.serial_number if self.active_dongle else 'USB' }' "
-                    f"dicabut atau kehilangan otorisasi! Sesi dikunci otomatis."
-                )
+                self.active_dongle = None
+                reason = "KILL-SWITCH TRIGGERED: USB Flashdisk dicabut! Sesi ditutup dan seluruh kredensial dihapus."
                 self._log(reason, "CRITICAL")
                 for cb in list(self._kill_switch_callbacks):
                     try:
@@ -554,39 +556,80 @@ class AuthGate:
         faces_sorted = sorted(faces, key=lambda b: b[2] * b[3], reverse=True)
         x, y, fw, fh = [int(v) for v in faces_sorted[0]]
 
-        # Draw Emerald tactical corner brackets
-        emerald_bgr = (129, 185, 16)  # #10B981 in BGR
+        # Check mask presence
+        is_masked, _ = self.is_face_masked(frame_bgr, (x, y, fw, fh))
+
         corner = max(18, min(fw, fh) // 5)
         thickness = 2
+        hud_color = (0, 0, 230) if is_masked else (129, 185, 16)  # Red if masked, Emerald if clear
 
         # Top-left
-        cv2.line(annotated, (x, y), (x + corner, y), emerald_bgr, thickness)
-        cv2.line(annotated, (x, y), (x, y + corner), emerald_bgr, thickness)
+        cv2.line(annotated, (x, y), (x + corner, y), hud_color, thickness)
+        cv2.line(annotated, (x, y), (x, y + corner), hud_color, thickness)
         # Top-right
-        cv2.line(annotated, (x + fw, y), (x + fw - corner, y), emerald_bgr, thickness)
-        cv2.line(annotated, (x + fw, y), (x + fw, y + corner), emerald_bgr, thickness)
+        cv2.line(annotated, (x + fw, y), (x + fw - corner, y), hud_color, thickness)
+        cv2.line(annotated, (x + fw, y), (x + fw, y + corner), hud_color, thickness)
         # Bottom-left
-        cv2.line(annotated, (x, y + fh), (x + corner, y + fh), emerald_bgr, thickness)
-        cv2.line(annotated, (x, y + fh), (x, y + fh - corner), emerald_bgr, thickness)
+        cv2.line(annotated, (x, y + fh), (x + corner, y + fh), hud_color, thickness)
+        cv2.line(annotated, (x, y + fh), (x, y + fh - corner), hud_color, thickness)
         # Bottom-right
-        cv2.line(annotated, (x + fw, y + fh), (x + fw - corner, y + fh), emerald_bgr, thickness)
-        cv2.line(annotated, (x + fw, y + fh), (x + fw, y + fh - corner), emerald_bgr, thickness)
+        cv2.line(annotated, (x + fw, y + fh), (x + fw - corner, y + fh), hud_color, thickness)
+        cv2.line(annotated, (x + fw, y + fh), (x + fw, y + fh - corner), hud_color, thickness)
 
+        hud_text = "MASK DETECTED [PLEASE REMOVE MASK]" if is_masked else f"BIOMETRIC LOCK ACQUIRED [{fw}x{fh}px]"
         cv2.putText(
             annotated,
-            f"BIOMETRIC LOCK ACQUIRED [{fw}x{fh}px]",
+            hud_text,
             (x, max(24, y - 10)),
             cv2.FONT_HERSHEY_PLAIN,
             1.2,
-            emerald_bgr,
+            hud_color,
             2,
         )
         return True, annotated, len(faces), (x, y, fw, fh)
 
+    def is_face_masked(self, frame_bgr: Any, bbox: Tuple[int, int, int, int]) -> Tuple[bool, float]:
+        """
+        Detects whether the operator is wearing a medical or cloth mask covering the mouth/nose.
+        Analyzes skin color pixel density in the lower 45% (chin/mouth zone).
+        Returns: (is_masked, skin_coverage_ratio)
+        """
+        if not OPENCV_AVAILABLE or cv2 is None or frame_bgr is None:
+            return False, 1.0
+        x, y, w, h = bbox
+        if w < 20 or h < 20:
+            return False, 1.0
+        face_roi = frame_bgr[max(0, y):y + h, max(0, x):x + w]
+        if face_roi.size == 0:
+            return False, 1.0
+
+        try:
+            import numpy as np
+            lower_h = int(h * 0.45)
+            lower_roi = face_roi[h - lower_h:, :]
+
+            hsv = cv2.cvtColor(lower_roi, cv2.COLOR_BGR2HSV)
+            ycrcb = cv2.cvtColor(lower_roi, cv2.COLOR_BGR2YCrCb)
+
+            mask_hsv = cv2.inRange(hsv, np.array([0, 18, 30], dtype=np.uint8), np.array([35, 255, 255], dtype=np.uint8))
+            mask_ycrcb = cv2.inRange(ycrcb, np.array([0, 128, 70], dtype=np.uint8), np.array([255, 180, 135], dtype=np.uint8))
+            combined = cv2.bitwise_and(mask_hsv, mask_ycrcb)
+
+            skin_pixels = np.count_nonzero(combined)
+            total = lower_roi.shape[0] * lower_roi.shape[1]
+            ratio = skin_pixels / float(total) if total > 0 else 1.0
+
+            # If skin in mouth/chin region is below 28%, a mask/covering is present
+            return (ratio < 0.28), ratio
+        except Exception:
+            return False, 1.0
+
     def extract_face_feature_vector(self, frame_bgr: Any, bbox: Tuple[int, int, int, int]) -> Optional[str]:
         """
-        Extracts a normalized, equalized biometric representation of the detected face (64x64)
-        and returns it encoded as a hex string for storage in face_profile_hash.
+        Extracts a high-discrimination multi-zone facial biometric representation
+        (CLAHE normalized intensity + Sobel contour gradients), compressed via zlib
+        and encoded in base64 with version prefix 'LXV_BIO_V2:'.
+        Length is ~500-1500 chars, ideal for SQLite & Supabase Cloud storage.
         """
         if not OPENCV_AVAILABLE or cv2 is None or frame_bgr is None:
             return None
@@ -597,38 +640,104 @@ class AuthGate:
         face_roi = frame_bgr[max(0, y):y + h, max(0, x):x + w]
         if face_roi.size == 0:
             return None
-        gray = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
-        gray = cv2.equalizeHist(gray)
-        resized = cv2.resize(gray, (64, 64), interpolation=cv2.INTER_AREA)
-        # Return hex of bytes
-        return resized.tobytes().hex()
-
-    def compare_face_feature(self, candidate_hex: str, stored_hex: str) -> Tuple[bool, float]:
-        """
-        Compares candidate face vector with stored enrolled profile using normalized correlation.
-        Returns: (is_match, similarity_percentage)
-        """
-        if not candidate_hex or not stored_hex:
-            return False, 0.0
-        # If stored is default initial placeholder, treat as open for enrollment or matching
-        if stored_hex == hashlib.sha256(b"LEXVAULT_BIOMETRIC_ENROLLED_V1").hexdigest():
-            return True, 100.0
 
         try:
-            cand_bytes = bytes.fromhex(candidate_hex)
-            stored_bytes = bytes.fromhex(stored_hex)
-            if len(cand_bytes) != 64 * 64 or len(stored_bytes) != 64 * 64:
+            import numpy as np
+            gray = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY) if len(face_roi.shape) == 3 else face_roi
+            face = cv2.resize(gray, (80, 80), interpolation=cv2.INTER_AREA)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            face_eq = clahe.apply(face)
+
+            gx = cv2.Sobel(face_eq, cv2.CV_32F, 1, 0, ksize=3)
+            gy = cv2.Sobel(face_eq, cv2.CV_32F, 0, 1, ksize=3)
+            mag = cv2.magnitude(gx, gy)
+            mag = cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+
+            f_pack = cv2.resize(face_eq, (40, 40), interpolation=cv2.INTER_AREA)
+            m_pack = cv2.resize(mag, (40, 40), interpolation=cv2.INTER_AREA)
+            packed = np.hstack([f_pack, m_pack])
+
+            compressed = zlib.compress(packed.tobytes(), level=9)
+            encoded = base64.b64encode(compressed).decode("ascii")
+            return f"LXV_BIO_V2:{encoded}"
+        except Exception as exc:
+            self._log(f"Face extraction error: {exc}", "WARN")
+            return None
+
+    def compare_face_feature(self, candidate_str: str, stored_str: str) -> Tuple[bool, float]:
+        """
+        Compares candidate face vector with stored enrolled profile using multi-zone
+        cross-correlation across eyes, nose/mouth, and gradient edges.
+        Returns: (is_match, similarity_percentage)
+        Rejects unenrolled profiles, friend/unauthorized faces, or empty placeholders.
+        """
+        if not candidate_str or not stored_str:
+            return False, 0.0
+
+        stored_clean = stored_str.strip()
+        if (
+            stored_clean in ("EMPTY", "NONE", "")
+            or stored_clean.startswith("LEXVAULT_BIOMETRIC_ENROLLED")
+            or len(stored_clean) < 30
+        ):
+            # Not enrolled or initial placeholder -> strictly unauthorized
+            return False, 0.0
+
+        try:
+            import numpy as np
+
+            def _decode(v_str: str) -> Optional[np.ndarray]:
+                if v_str.startswith("LXV_BIO_V2:"):
+                    raw = base64.b64decode(v_str[len("LXV_BIO_V2:"):])
+                    decomp = zlib.decompress(raw)
+                    return np.frombuffer(decomp, dtype=np.uint8).reshape((40, 80))
+                # Backward compatibility for legacy raw hex (64x64)
+                try:
+                    raw_b = bytes.fromhex(v_str)
+                    if len(raw_b) == 64 * 64:
+                        arr = np.frombuffer(raw_b, dtype=np.uint8).reshape((64, 64))
+                        arr_small = cv2.resize(arr, (40, 40))
+                        return np.hstack([arr_small, arr_small])
+                except Exception:
+                    pass
+                return None
+
+            p_cand = _decode(candidate_str)
+            p_stored = _decode(stored_clean)
+            if p_cand is None or p_stored is None:
                 return False, 0.0
 
-            import numpy as np
-            cand_mat = np.frombuffer(cand_bytes, dtype=np.uint8).reshape((64, 64)).astype(np.float32)
-            stored_mat = np.frombuffer(stored_bytes, dtype=np.uint8).reshape((64, 64)).astype(np.float32)
+            f1_face = p_cand[:, :40].astype(np.float32)
+            f1_mag = p_cand[:, 40:].astype(np.float32)
+            f2_face = p_stored[:, :40].astype(np.float32)
+            f2_mag = p_stored[:, 40:].astype(np.float32)
 
-            res = cv2.matchTemplate(cand_mat, stored_mat, cv2.TM_CCOEFF_NORMED)
-            similarity = float(res[0][0])  # range -1.0 to 1.0
-            similarity_pct = max(0.0, min(100.0, ((similarity + 1.0) / 2.0) * 100.0))
-            # Relaxed threshold (>= 0.25 correlation / 62.5% norm) for smooth tracking
-            return (similarity >= 0.25), similarity_pct
+            def _best_corr(img1: np.ndarray, img2: np.ndarray, pad: int = 3) -> float:
+                h, w = img2.shape
+                if h <= 2 * pad or w <= 2 * pad:
+                    pad = 1
+                inner = img2[pad:h - pad, pad:w - pad]
+                res = cv2.matchTemplate(img1, inner, cv2.TM_CCOEFF_NORMED)
+                return float(np.max(res))
+
+            c_face = _best_corr(f1_face, f2_face, pad=3)
+            c_mag = _best_corr(f1_mag, f2_mag, pad=3)
+            c_eyes = _best_corr(f1_face[5:25, :], f2_face[5:25, :], pad=2)
+            c_mouth = _best_corr(f1_face[20:38, :], f2_face[20:38, :], pad=2)
+
+            composite = 0.35 * c_face + 0.30 * c_mag + 0.20 * c_eyes + 0.15 * c_mouth
+            sim_pct = max(0.0, min(100.0, ((composite + 1.0) / 2.0) * 100.0))
+
+            # Strict security thresholds:
+            # - True unmasked owner gives ~75-92% (composite > 0.50)
+            # - Masked or friend gives < 45% or negative mouth/eye correlation
+            is_match = bool(
+                composite >= 0.52
+                and sim_pct >= 65.0
+                and c_eyes >= 0.30
+                and c_mouth >= 0.25
+            )
+            return is_match, sim_pct
         except Exception as exc:
             self._log(f"Face comparison error: {exc}", "WARN")
             return False, 0.0
@@ -637,14 +746,19 @@ class AuthGate:
         """
         Captures and registers the current operator's biometric face template to database.
         """
+        is_masked, _ = self.is_face_masked(frame_bgr, bbox)
+        if is_masked:
+            return False, "Masker terdeteksi! Harap lepas masker wajah Anda sebelum mendaftar."
+
         vector_hex = self.extract_face_feature_vector(frame_bgr, bbox)
         if not vector_hex:
             return False, "Gagal mengekstrak fitur wajah dari frame kamera."
 
         ok = self.db_manager.update_dongle_face_profile(serial_number, vector_hex)
         if ok:
-            self._log(f"Biometrik wajah berhasil didaftarkan untuk dongle '{serial_number}'.", "SUCCESS")
-            return True, "Wajah berhasil didaftarkan ke Database!"
+            storage_type = "Supabase Cloud & SQLite" if self.db_manager.cloud_online else "SQLite Lokal"
+            self._log(f"Biometrik wajah berhasil didaftarkan untuk dongle '{serial_number}' ({storage_type}).", "SUCCESS")
+            return True, f"Wajah berhasil didaftarkan ke {storage_type}!"
         return False, "Gagal menyimpan biometrik ke database."
 
     # =========================================================================

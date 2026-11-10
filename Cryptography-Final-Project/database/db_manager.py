@@ -40,6 +40,11 @@ class DatabaseManager:
         logger_callback: Optional[Callable[[str, str], None]] = None,
     ) -> None:
         self.base_dir = Path(__file__).resolve().parent.parent
+        # Explicitly reload .env with full absolute path to avoid missing environment vars
+        env_file = self.base_dir / ".env"
+        if env_file.exists():
+            load_dotenv(dotenv_path=env_file, override=True)
+
         default_db = os.getenv("SQLITE_DB_PATH", "offline_vault.db")
         self.sqlite_path = Path(sqlite_path) if sqlite_path else (self.base_dir / default_db)
         self.schema_path = Path(__file__).resolve().parent / "schema.sql"
@@ -203,9 +208,14 @@ class DatabaseManager:
             "registered_at": now_iso,
         }
 
-        if self.cloud_online and self.supabase_client is not None:
+        if self.supabase_client is None and self.supabase_url and self.supabase_key:
+            self._init_supabase()
+
+        if self.supabase_client is not None:
             try:
                 self.supabase_client.table("authorized_dongles").upsert(payload).execute()
+                self.cloud_online = True
+                self._log(f"Supabase Cloud: Dongle '{serial_number}' ({operator_name}) tersimpan ke Cloud.", "SUCCESS")
             except Exception as exc:
                 self.cloud_online = False
                 self._log(f"Supabase write failed ({exc}), persisting to local SQLite.", "WARN")
@@ -310,14 +320,22 @@ class DatabaseManager:
                 conn.close()
 
     def update_dongle_face_profile(self, serial_number: str, face_profile_hash: str) -> bool:
-        if self.cloud_online and self.supabase_client is not None:
+        if self.supabase_client is None and self.supabase_url and self.supabase_key:
+            self._init_supabase()
+
+        if self.supabase_client is not None:
             try:
-                self.supabase_client.table("authorized_dongles").update(
+                res = self.supabase_client.table("authorized_dongles").update(
                     {"face_profile_hash": face_profile_hash}
                 ).eq("serial_number", serial_number).execute()
+                if res.data:
+                    self.cloud_online = True
+                    self._log(f"Supabase Cloud: Profil wajah berhasil disimpan untuk dongle '{serial_number}'.", "SUCCESS")
+                else:
+                    self._log(f"Supabase Cloud: Dongle '{serial_number}' tidak ditemukan di tabel Supabase.", "WARN")
             except Exception as exc:
                 self.cloud_online = False
-                self._log(f"Supabase face profile update fallback ({exc}).", "WARN")
+                self._log(f"Supabase face profile update failed ({exc}); saving to SQLite.", "WARN")
 
         with self._lock:
             conn = self._get_sqlite_conn()

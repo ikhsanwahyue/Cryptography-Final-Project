@@ -392,19 +392,6 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         self.ent_chacha_key.pack(side="left", fill="x", expand=True, padx=8)
         self.ent_chacha_key.insert(0, "CHACHA20-FORENSIC-SEAL-2026")
 
-        ctk.CTkButton(
-            pass_row,
-            text="GENERATE DEMO EVIDENCE FILE",
-            width=210,
-            height=36,
-            font=get_mono_font(11, "bold"),
-            fg_color=COLOR_SURFACE_DARK,
-            border_color=COLOR_BORDER,
-            border_width=1,
-            hover_color=COLOR_BORDER,
-            command=self._generate_demo_evidence_file,
-        ).pack(side="right")
-
         # Action Buttons
         actions_row = ctk.CTkFrame(form, fg_color="transparent")
         actions_row.pack(fill="x", pady=(4, 10))
@@ -452,22 +439,6 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         if path:
             self.ent_file_path.delete(0, "end")
             self.ent_file_path.insert(0, path)
-
-    def _generate_demo_evidence_file(self) -> None:
-        demo_dir = Path(__file__).resolve().parent.parent / "dongle_sample"
-        demo_dir.mkdir(parents=True, exist_ok=True)
-        demo_file = demo_dir / "forensic_financial_ledger_2026.pdf"
-        sample_bytes = (
-            b"%PDF-1.7\n"
-            b"%LEXVAULT FORENSIC EVIDENCE ARTIFACT - CASE #LXV-2026-991\n"
-            b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
-            b"CONFIDENTIAL DIGITAL FORENSIC AUDIT PAYLOAD - SHA256 VERIFIED\n"
-            b"%%EOF\n"
-        )
-        demo_file.write_bytes(sample_bytes)
-        self.ent_file_path.delete(0, "end")
-        self.ent_file_path.insert(0, str(demo_file))
-        self.log(f"File bukti sampel berhasil dibuat: {demo_file.name}", "INFO")
 
     def _handle_file_encrypt(self) -> None:
         target = self.ent_file_path.get().strip()
@@ -537,7 +508,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         self.ent_stego_path = ctk.CTkEntry(
             path_row,
-            placeholder_text="Pilih citra PNG...",
+            placeholder_text="Pilih gambar (PNG, JPG, JPEG, WEBP, BMP)...",
             font=get_mono_font(11, "normal"),
             fg_color=COLOR_BASE,
             border_color=COLOR_BORDER,
@@ -546,28 +517,18 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         ctk.CTkButton(
             path_row,
-            text="BROWSE PNG",
-            width=105,
+            text="BROWSE IMAGE",
+            width=115,
             font=get_mono_font(11, "bold"),
             fg_color=COLOR_SURFACE_DARK,
             border_color=COLOR_BORDER,
             border_width=1,
             command=self._browse_stego_image,
-        ).pack(side="left", padx=(0, 6))
-
-        ctk.CTkButton(
-            path_row,
-            text="GENERATE SAMPLE PNG",
-            width=155,
-            font=get_mono_font(11, "bold"),
-            fg_color=COLOR_PRIMARY,
-            hover_color=COLOR_PRIMARY_HOVER,
-            command=self._generate_sample_png,
         ).pack(side="right")
 
         self.stego_preview_lbl = ctk.CTkLabel(
             left_card,
-            text="[ PNG CARRIER PREVIEW ]\nUse 'GENERATE SAMPLE PNG' or 'BROWSE PNG'",
+            text="[ CARRIER IMAGE PREVIEW ]\nSupports PNG, JPG, JPEG, WEBP, BMP",
             font=get_mono_font(11, "normal"),
             text_color=COLOR_TEXT_MUTED,
             fg_color=COLOR_BASE,
@@ -650,43 +611,25 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
     def _browse_stego_image(self) -> None:
         path = filedialog.askopenfilename(
-            title="Select Lossless PNG Image",
-            filetypes=[("PNG Images", "*.png"), ("All Files", "*.*")],
+            title="Select Carrier Image (PNG, JPG, JPEG, WEBP, BMP)",
+            filetypes=[
+                ("Image Files (*.png, *.jpg, *.jpeg, *.webp, *.bmp)", "*.png *.jpg *.jpeg *.webp *.bmp *.PNG *.JPG *.JPEG *.WEBP *.BMP"),
+                ("PNG Images (*.png)", "*.png *.PNG"),
+                ("JPEG Images (*.jpg, *.jpeg)", "*.jpg *.jpeg *.JPG *.JPEG"),
+                ("All Files (*.*)", "*.*"),
+            ],
         )
         if path:
             self.ent_stego_path.delete(0, "end")
             self.ent_stego_path.insert(0, path)
             self._load_stego_preview(path)
 
-    def _generate_sample_png(self) -> None:
-        sample_dir = Path(__file__).resolve().parent.parent / "dongle_sample"
-        sample_dir.mkdir(parents=True, exist_ok=True)
-        out_path = sample_dir / "carrier_forensic_seal.png"
-
-        img = Image.new("RGB", (480, 280), color=(15, 23, 42))
-        draw = ImageDraw.Draw(img)
-        # Draw tactical forensic grid pattern
-        for x in range(0, 480, 24):
-            draw.line([(x, 0), (x, 280)], fill=(30, 41, 59), width=1)
-        for y in range(0, 280, 24):
-            draw.line([(0, y), (480, y)], fill=(30, 41, 59), width=1)
-        draw.rectangle([(16, 16), (464, 264)], outline=(37, 99, 235), width=2)
-        draw.rectangle([(32, 32), (448, 248)], outline=(16, 185, 129), width=1)
-        draw.text((54, 115), "LEXVAULT // ISO-27037 CARRIER", fill=(248, 250, 252))
-        draw.text((54, 145), "LOSSLESS RGB LSB STEGANOGRAPHY MATRIX", fill=(16, 185, 129))
-        img.save(str(out_path), format="PNG")
-
-        self.ent_stego_path.delete(0, "end")
-        self.ent_stego_path.insert(0, str(out_path))
-        self._load_stego_preview(str(out_path))
-        self.log(f"Sample PNG Carrier berhasil dibuat: {out_path.name}", "INFO")
-
     def _handle_stego_embed(self) -> None:
         carrier = self.ent_stego_path.get().strip()
         secret = self.txt_stego_message.get("1.0", "end-1c").strip()
         if not carrier:
-            self._generate_sample_png()
-            carrier = self.ent_stego_path.get().strip()
+            self.log("Pilih gambar pembawa (carrier image) terlebih dahulu!", "WARN")
+            return
 
         try:
             src_path = Path(carrier)
@@ -749,38 +692,13 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         ctk.CTkButton(
             ctrl_row,
-            text="VERIFY FULL CHAIN INTEGRITY",
+            text="↻ REFRESH CHAIN LEDGER",
             height=34,
             font=get_mono_font(11, "bold"),
             fg_color=COLOR_EMERALD,
             hover_color="#059669",
             text_color="#052E16",
             command=self.refresh_audit_ledger,
-        ).pack(side="left", padx=(0, 8))
-
-        ctk.CTkButton(
-            ctrl_row,
-            text="⚠ SIMULATE DB TAMPER ATTACK",
-            height=34,
-            font=get_mono_font(11, "bold"),
-            fg_color="#450A0A",
-            hover_color="#7F1D1D",
-            text_color=COLOR_CRIMSON,
-            border_color=COLOR_CRIMSON,
-            border_width=1,
-            command=self._simulate_tamper_attack,
-        ).pack(side="left", padx=(0, 8))
-
-        ctk.CTkButton(
-            ctrl_row,
-            text="RE-MINE & REPAIR LEDGER",
-            height=34,
-            font=get_mono_font(11, "bold"),
-            fg_color=COLOR_SURFACE_DARK,
-            border_color=COLOR_BORDER,
-            border_width=1,
-            hover_color=COLOR_BORDER,
-            command=self._repair_tampered_chain,
         ).pack(side="left", padx=(0, 8))
 
         ctk.CTkButton(
@@ -876,28 +794,6 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         self.txt_ledger.insert("1.0", "\n".join(lines))
         self.txt_ledger.configure(state="disabled")
 
-    def _simulate_tamper_attack(self) -> None:
-        if len(self.blockchain.chain) < 1:
-            return
-        target_blk = self.blockchain.chain[-1]
-        forged_hash = "deadbeef" * 8
-        self.db_manager.tamper_block_for_audit_test(target_blk.index, forged_hash)
-        self.log(
-            f"SIMULASI INTRUSI: Field evidence_hash pada Blok #{target_blk.index} diubah paksa di SQLite!",
-            "CRITICAL",
-        )
-        self.refresh_audit_ledger()
-
-    def _repair_tampered_chain(self) -> None:
-        self.blockchain.reload_from_db()
-        for i, blk in enumerate(self.blockchain.chain):
-            if i > 0:
-                blk.previous_hash = self.blockchain.chain[i - 1].hash
-            blk.mine(self.blockchain.DIFFICULTY_PREFIX)
-            self.db_manager.save_audit_block(blk.to_dict())
-        self.log("Seluruh blok Layer 1 berhasil di-mine ulang dan disinkronkan.", "SUCCESS")
-        self.refresh_audit_ledger()
-
     def _open_polygonscan_link(self) -> None:
         url = self.latest_explorer_url or "https://amoy.polygonscan.com/"
         self.log(f"Membuka PolygonScan Amoy Explorer: {url}", "INFO")
@@ -912,8 +808,8 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         header_card = HUDCard(
             container,
-            title="AUTHENTICATION SECURITY & OPERATOR BIOMETRIC MANAGEMENT",
-            subtitle="Enroll Biometric Face Template to Database (Dual Cloud/Local Sync)",
+            title="PERBARUI BIOMETRIK WAJAH OPERATOR AKTIF (LOGGED-IN USER)",
+            subtitle="Ambil ulang dan perbarui profil biometrik wajah operator yang sedang aktif ke database",
         )
         header_card.pack(fill="x", pady=(0, 8))
 
@@ -932,7 +828,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         self.tab5_cam_label = ctk.CTkLabel(
             left_col,
-            text="[ WEBCAM STANDBY ]\nClick 'START CAMERA' to begin biometric face registration",
+            text="[ WEBCAM STANDBY ]\nKlik 'NYALAKAN KAMERA' untuk memperbarui profil wajah Anda",
             font=get_mono_font(12, "bold"),
             text_color=COLOR_TEXT_MUTED,
             width=460,
@@ -954,12 +850,12 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         ctk.CTkLabel(
             right_col,
-            text="ACTIVE CUSTODIAN PROFILE",
+            text="PROFIL OPERATOR AKTIF (LOGIN SAAT INI)",
             font=get_mono_font(12, "bold"),
             text_color=COLOR_TEXT_PRIMARY,
         ).pack(anchor="w", padx=14, pady=(12, 6))
 
-        self.lbl_tab5_status = StatusBadge(right_col, text="READY FOR ENROLLMENT", status="INFO")
+        self.lbl_tab5_status = StatusBadge(right_col, text="READY TO UPDATE FACE", status="INFO")
         self.lbl_tab5_status.pack(anchor="w", padx=14, pady=(0, 10))
 
         self.txt_tab5_profile = ctk.CTkTextbox(
@@ -975,7 +871,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         ctk.CTkButton(
             right_col,
-            text="◉ START CAMERA",
+            text="◉ NYALAKAN KAMERA",
             font=get_mono_font(12, "bold"),
             height=36,
             fg_color=COLOR_PRIMARY,
@@ -985,7 +881,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         ctk.CTkButton(
             right_col,
-            text="📸 ENROLL WAJAH KE DATABASE",
+            text="📸 PERBARUI WAJAH SAYA KE DATABASE",
             font=get_mono_font(12, "bold"),
             height=38,
             fg_color=COLOR_EMERALD,
@@ -1016,7 +912,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         ctk.CTkButton(
             right_col,
-            text="⏹ STOP CAMERA",
+            text="⏹ STOP KAMERA",
             font=get_mono_font(11, "bold"),
             height=32,
             fg_color=COLOR_SURFACE,
@@ -1027,13 +923,14 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
     def _refresh_tab5_operator_info(self) -> None:
         serial = self.active_dongle.serial_number if self.active_dongle else os.getenv("LEXVAULT_DEFAULT_DONGLE_SERIAL", "LEXVAULT-DEV-DONGLE-001")
         rec = self.db_manager.get_dongle(serial) or {}
-        has_face = bool(rec.get("face_profile_hash") and len(str(rec.get("face_profile_hash"))) > 64)
+        face_hash = str(rec.get("face_profile_hash") or "").strip()
+        has_face = bool(face_hash and face_hash not in ("EMPTY", "NONE") and len(face_hash) > 30)
         info = (
-            f"SERIAL NUMBER : {serial}\n"
-            f"OPERATOR      : {rec.get('operator_name', 'N/A')}\n"
-            f"BADGE ID      : {rec.get('badge_id', 'N/A')}\n"
-            f"BIOMETRIC     : {'ENROLLED (DATABASE ACTIVE)' if has_face else 'INITIAL PLACEHOLDER'}\n"
-            f"STORAGE       : {'SUPABASE + SQLITE' if self.db_manager.cloud_online else 'OFFLINE SQLITE'}"
+            f"OPERATOR AKTIF : {rec.get('operator_name', 'N/A')}\n"
+            f"BADGE ID       : {rec.get('badge_id', 'N/A')}\n"
+            f"SERIAL TOKEN   : {serial}\n"
+            f"STATUS WAJAH   : {'TERDAFTAR & AKTIF (V2)' if has_face else 'BELUM TERDAFTAR (PERLU UPDATE)'}\n"
+            f"DATABASE SYNC  : {'SUPABASE + SQLITE' if self.db_manager.cloud_online else 'OFFLINE SQLITE'}"
         )
         self.txt_tab5_profile.configure(state="normal")
         self.txt_tab5_profile.delete("1.0", "end")
@@ -1111,28 +1008,31 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
     def _tab5_enroll_face(self) -> None:
         if not self._cam_running or self._last_raw_frame is None:
-            self.log("Nyalakan kamera terlebih dahulu untuk mendaftarkan wajah.", "WARN")
+            self.log("Nyalakan kamera terlebih dahulu untuk merekam pembaruan wajah.", "WARN")
             self.lbl_tab5_status.set_status("START CAMERA FIRST", "WARN")
             return
         if not self.auth_gate:
             return
 
         serial = self.active_dongle.serial_number if self.active_dongle else os.getenv("LEXVAULT_DEFAULT_DONGLE_SERIAL", "LEXVAULT-DEV-DONGLE-001")
+        rec = self.db_manager.get_dongle(serial) or {}
+        op_name = rec.get("operator_name", "Operator Aktif")
+
         detected, _, _, bbox = self.auth_gate.detect_face_in_frame(self._last_raw_frame)
         if not detected or bbox[2] < 30 or bbox[3] < 30:
-            self.log("Wajah tidak terdeteksi dengan jelas. Hadapkan wajah ke kamera.", "WARN")
+            self.log("Wajah tidak terdeteksi dengan jelas. Hadapkan wajah tegak ke kamera.", "WARN")
             self.lbl_tab5_status.set_status("FACE NOT CLEAR", "WARN")
             return
 
         ok, msg = self.auth_gate.enroll_face_profile(serial, self._last_raw_frame, bbox)
         if ok:
-            self.log(f"Pendaftaran biometrik berhasil: {msg}", "SUCCESS")
-            self.lbl_tab5_status.set_status("BIOMETRIC ENROLLED & SAVED!", "SUCCESS")
+            self.log(f"Pembaruan wajah berhasil: Profil biometrik operator '{op_name}' tersimpan di database.", "SUCCESS")
+            self.lbl_tab5_status.set_status(f"WAJAH DIPERBARUI ({op_name})", "SUCCESS")
             self._refresh_tab5_operator_info()
             self._tab5_stop_cam()
         else:
-            self.log(f"Gagal mendaftarkan biometrik: {msg}", "ERROR")
-            self.lbl_tab5_status.set_status("ENROLL FAILED", "DANGER")
+            self.log(f"Gagal memperbarui biometrik: {msg}", "ERROR")
+            self.lbl_tab5_status.set_status("UPDATE WAJAH GAGAL", "DANGER")
 
     def _tab5_change_password_dialog(self) -> None:
         serial = self.active_dongle.serial_number if self.active_dongle else os.getenv("LEXVAULT_DEFAULT_DONGLE_SERIAL", "LEXVAULT-DEV-DONGLE-001")
@@ -1185,20 +1085,21 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
     def _tab5_add_user_dialog(self) -> None:
         dialog = ctk.CTkToplevel(self)
-        dialog.title("TAMBAH OPERATOR / DONGLE BARU")
-        dialog.geometry("480x420")
-        dialog.minsize(440, 380)
+        dialog.title("TAMBAH OPERATOR & DONGLE BARU")
+        dialog.geometry("520x680")
+        dialog.minsize(480, 620)
         dialog.transient(self.winfo_toplevel())
         dialog.grab_set()
 
-        ctk.CTkLabel(dialog, text="DAFTARKAN OPERATOR & USB DONGLE BARU", font=get_mono_font(13, "bold")).pack(anchor="w", padx=20, pady=(16, 4))
-        ctk.CTkLabel(dialog, text="Generate classified.key ke USB dan daftarkan ke database.", font=get_mono_font(11), text_color=COLOR_TEXT_MUTED).pack(anchor="w", padx=20, pady=(0, 12))
+        ctk.CTkLabel(dialog, text="DAFTARKAN OPERATOR & USB DONGLE BARU", font=get_mono_font(13, "bold")).pack(anchor="w", padx=20, pady=(14, 2))
+        ctk.CTkLabel(dialog, text="Generate classified.key, rekam wajah biometrik, dan daftarkan ke database.", font=get_mono_font(11), text_color=COLOR_TEXT_MUTED).pack(anchor="w", padx=20, pady=(0, 10))
 
-        form = ctk.CTkFrame(dialog, fg_color="transparent")
-        form.pack(fill="x", padx=20)
+        scroll = ctk.CTkScrollableFrame(dialog, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=14, pady=(0, 10))
 
-        ctk.CTkLabel(form, text="Folder Root USB Flash Drive:", font=get_mono_font(11, "bold")).pack(anchor="w")
-        p_row = ctk.CTkFrame(form, fg_color="transparent")
+        # 1. Mount Path
+        ctk.CTkLabel(scroll, text="1. Folder Root USB Flash Drive:", font=get_mono_font(11, "bold")).pack(anchor="w")
+        p_row = ctk.CTkFrame(scroll, fg_color="transparent")
         p_row.pack(fill="x", pady=(2, 8))
         entry_p = ctk.CTkEntry(p_row, placeholder_text="Pilih folder USB...", font=get_mono_font(11))
         entry_p.pack(side="left", fill="x", expand=True, padx=(0, 8))
@@ -1208,42 +1109,190 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
             entry_p.insert(0, d) if d else None
         )).pack(side="right")
 
-        ctk.CTkLabel(form, text="Nama Operator Baru:", font=get_mono_font(11, "bold")).pack(anchor="w")
-        entry_name = ctk.CTkEntry(form, placeholder_text="misal: Briptu Bintang Shada", font=get_mono_font(11))
+        # 2. Operator Name
+        ctk.CTkLabel(scroll, text="2. Nama Operator Baru:", font=get_mono_font(11, "bold")).pack(anchor="w")
+        entry_name = ctk.CTkEntry(scroll, placeholder_text="misal: Briptu Bintang Shada", font=get_mono_font(11))
         entry_name.pack(fill="x", pady=(2, 8))
 
-        ctk.CTkLabel(form, text="Badge ID / NIP:", font=get_mono_font(11, "bold")).pack(anchor="w")
-        entry_badge = ctk.CTkEntry(form, placeholder_text="misal: DF-INA-99881", font=get_mono_font(11))
+        # 3. Badge ID
+        ctk.CTkLabel(scroll, text="3. Badge ID / NIP:", font=get_mono_font(11, "bold")).pack(anchor="w")
+        entry_badge = ctk.CTkEntry(scroll, placeholder_text="misal: DF-INA-99881", font=get_mono_font(11))
         entry_badge.pack(fill="x", pady=(2, 8))
 
-        ctk.CTkLabel(form, text="Sandi Rahasia Operator:", font=get_mono_font(11, "bold")).pack(anchor="w")
-        entry_pwd = ctk.CTkEntry(form, placeholder_text="Setel password awal...", show="•", font=get_mono_font(11))
-        entry_pwd.pack(fill="x", pady=(2, 14))
+        # 4. Password
+        ctk.CTkLabel(scroll, text="4. Sandi Rahasia Operator:", font=get_mono_font(11, "bold")).pack(anchor="w")
+        entry_pwd = ctk.CTkEntry(scroll, placeholder_text="Setel password awal...", show="•", font=get_mono_font(11))
+        entry_pwd.pack(fill="x", pady=(2, 10))
+
+        # 5. Face Camera Capture
+        ctk.CTkLabel(scroll, text="5. Rekam Biometrik Wajah Operator Baru (Wajib):", font=get_mono_font(11, "bold")).pack(anchor="w")
+
+        cam_box = ctk.CTkFrame(scroll, fg_color=COLOR_SURFACE_DARK, border_color=COLOR_BORDER, border_width=1, corner_radius=6)
+        cam_box.pack(fill="x", pady=(4, 8))
+
+        cam_preview = ctk.CTkLabel(
+            cam_box,
+            text="[ KAMERA STANDBY ]\nKlik 'NYALAKAN KAMERA' untuk merekam wajah operator baru",
+            font=get_mono_font(11, "bold"),
+            text_color=COLOR_TEXT_MUTED,
+            height=180,
+        )
+        cam_preview.pack(fill="x", padx=8, pady=8)
+
+        dialog_cam_state = {
+            "cap": None,
+            "running": False,
+            "after_id": None,
+            "last_frame": None,
+            "captured_vector": None,
+            "ctk_img": None,
+        }
+
+        lbl_face_status = ctk.CTkLabel(
+            scroll,
+            text="⚠️ STATUS BIOMETRIK: BELUM DIAMBIL (WAJIB)",
+            font=get_mono_font(11, "bold"),
+            text_color=COLOR_AMBER,
+        )
+        lbl_face_status.pack(anchor="w", pady=(0, 6))
+
+        def _stop_new_user_cam():
+            dialog_cam_state["running"] = False
+            if dialog_cam_state["after_id"]:
+                try:
+                    dialog.after_cancel(dialog_cam_state["after_id"])
+                except Exception:
+                    pass
+                dialog_cam_state["after_id"] = None
+            if dialog_cam_state["cap"] is not None:
+                try:
+                    dialog_cam_state["cap"].release()
+                except Exception:
+                    pass
+                dialog_cam_state["cap"] = None
+            try:
+                if hasattr(cam_preview, "_label") and cam_preview._label is not None:
+                    cam_preview._label.configure(image="")
+            except Exception:
+                pass
+            dialog_cam_state["ctk_img"] = None
+
+        def _poll_new_user_cam():
+            if not dialog_cam_state["running"] or dialog_cam_state["cap"] is None:
+                return
+            ret, frame = dialog_cam_state["cap"].read()
+            if not ret or frame is None:
+                _stop_new_user_cam()
+                return
+
+            dialog_cam_state["last_frame"] = frame.copy()
+            if self.auth_gate:
+                detected, ann, _, _ = self.auth_gate.detect_face_in_frame(frame)
+            else:
+                ann = frame
+
+            rgb = cv2.cvtColor(ann, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(rgb)
+            ctk_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(320, 180))
+            dialog_cam_state["ctk_img"] = ctk_img
+            cam_preview.configure(image=ctk_img, text="")
+            dialog_cam_state["after_id"] = dialog.after(30, _poll_new_user_cam)
+
+        def _start_new_user_cam():
+            if not OPENCV_AVAILABLE or cv2 is None:
+                lbl_face_status.configure(text="OpenCV tidak tersedia pada sistem!", text_color=COLOR_CRIMSON)
+                return
+            if dialog_cam_state["running"]:
+                return
+            try:
+                dialog_cam_state["cap"] = cv2.VideoCapture(0)
+                if not dialog_cam_state["cap"] or not dialog_cam_state["cap"].isOpened():
+                    _stop_new_user_cam()
+                    lbl_face_status.configure(text="Kamera tidak dapat dibuka! Cek izin sistem.", text_color=COLOR_CRIMSON)
+                    return
+                dialog_cam_state["running"] = True
+                lbl_face_status.configure(text="◉ KAMERA AKTIF: Posisikan wajah di tengah...", text_color=COLOR_PRIMARY)
+                _poll_new_user_cam()
+            except Exception as exc:
+                lbl_face_status.configure(text=f"Error kamera: {exc}", text_color=COLOR_CRIMSON)
+
+        def _capture_new_user_face():
+            if not dialog_cam_state["running"] or dialog_cam_state["last_frame"] is None:
+                lbl_face_status.configure(text="Nyalakan kamera terlebih dahulu!", text_color=COLOR_CRIMSON)
+                return
+            if not self.auth_gate:
+                return
+
+            detected, _, _, bbox = self.auth_gate.detect_face_in_frame(dialog_cam_state["last_frame"])
+            if not detected or bbox[2] < 30 or bbox[3] < 30:
+                lbl_face_status.configure(text="Wajah belum terdeteksi jelas! Dekatkan wajah.", text_color=COLOR_CRIMSON)
+                return
+
+            vec = self.auth_gate.extract_face_feature_vector(dialog_cam_state["last_frame"], bbox)
+            if not vec:
+                lbl_face_status.configure(text="Gagal mengekstrak vektor biometrik wajah!", text_color=COLOR_CRIMSON)
+                return
+
+            dialog_cam_state["captured_vector"] = vec
+            lbl_face_status.configure(
+                text=f"✓ WAJAH OPERATOR TERKUNCI & TERDAFTAR [{bbox[2]}x{bbox[3]}px]",
+                text_color=COLOR_EMERALD,
+            )
+            _stop_new_user_cam()
+            cam_preview.configure(text="[ FOTO WAJAH BERHASIL DIAMBIL & TERKUNCI ]", text_color=COLOR_EMERALD)
+
+        cam_btn_row = ctk.CTkFrame(scroll, fg_color="transparent")
+        cam_btn_row.pack(fill="x", pady=(0, 10))
+        ctk.CTkButton(
+            cam_btn_row,
+            text="◉ NYALAKAN KAMERA",
+            width=140,
+            fg_color=COLOR_PRIMARY,
+            hover_color=COLOR_PRIMARY_HOVER,
+            command=_start_new_user_cam,
+            font=get_mono_font(11, "bold"),
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            cam_btn_row,
+            text="📸 AMBIL FOTO WAJAH",
+            fg_color=COLOR_EMERALD,
+            hover_color="#059669",
+            text_color="#052E16",
+            command=_capture_new_user_face,
+            font=get_mono_font(11, "bold"),
+        ).pack(side="right", fill="x", expand=True)
 
         lbl_msg = ctk.CTkLabel(dialog, text="", font=get_mono_font(11), text_color=COLOR_CRIMSON)
-        lbl_msg.pack(padx=20, pady=(0, 8))
+        lbl_msg.pack(padx=20, pady=(2, 6))
 
         def _do_add():
             m = entry_p.get().strip()
             n = entry_name.get().strip()
             b = entry_badge.get().strip()
             pw = entry_pwd.get().strip()
+            face_vec = dialog_cam_state.get("captured_vector")
+
             if not m or not Path(m).exists():
                 lbl_msg.configure(text="Pilih folder USB yang valid!")
                 return
             if not n or not b or not pw:
-                lbl_msg.configure(text="Semua kolom wajib diisi!")
+                lbl_msg.configure(text="Semua kolom nama, badge, dan sandi wajib diisi!")
                 return
             if len(pw) < 6:
                 lbl_msg.configure(text="Password minimal 6 karakter!")
                 return
+            if not face_vec:
+                lbl_msg.configure(text="Wajah operator wajib direkam sebelum mendaftarkan USB!")
+                return
 
+            _stop_new_user_cam()
             if self.auth_gate:
                 ok, msg = self.auth_gate.provision_usb_drive(
                     mount_path=m,
                     operator_name=n,
                     badge_id=b,
                     password=pw,
+                    face_profile_hash=face_vec,
                 )
                 self.log(msg, "SUCCESS" if ok else "ERROR")
                 if ok:
@@ -1251,8 +1300,14 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
                 else:
                     lbl_msg.configure(text=msg)
 
+        def _on_close_dialog():
+            _stop_new_user_cam()
+            dialog.destroy()
+
+        dialog.protocol("WM_DELETE_WINDOW", _on_close_dialog)
+
         b_row = ctk.CTkFrame(dialog, fg_color="transparent")
         b_row.pack(fill="x", padx=20, pady=(4, 16))
-        ctk.CTkButton(b_row, text="BATAL", width=80, fg_color=COLOR_SURFACE, hover_color=COLOR_BORDER, command=dialog.destroy, font=get_mono_font(11, "bold")).pack(side="left")
+        ctk.CTkButton(b_row, text="BATAL", width=80, fg_color=COLOR_SURFACE, hover_color=COLOR_BORDER, command=_on_close_dialog, font=get_mono_font(11, "bold")).pack(side="left")
         ctk.CTkButton(b_row, text="💾 BUAT & DAFTARKAN DONGLE", fg_color=COLOR_EMERALD, hover_color="#059669", text_color="#052E16", command=_do_add, font=get_mono_font(11, "bold")).pack(side="right", fill="x", expand=True, padx=(10, 0))
 

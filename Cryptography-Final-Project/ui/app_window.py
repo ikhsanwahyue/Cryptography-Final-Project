@@ -195,7 +195,14 @@ class LexVaultApp(ctk.CTk):
 
     def _lock_session(self, reason: str) -> None:
         self.auth_gate.session_unlocked = False
+        self.auth_gate.active_dongle = None
         if self.workspace_frame is not None:
+            # Stop any running camera in Tab 5 if active
+            try:
+                self.workspace_frame._tab5_stop_cam()
+            except Exception:
+                pass
+            self.workspace_frame.active_dongle = None
             self.workspace_frame.pack_forget()
 
         self.badge_usb.set_status("USB SESSION: LOCKED", "LOCKED")
