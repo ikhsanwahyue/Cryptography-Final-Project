@@ -5,6 +5,7 @@ failover and local mirroring to SQLite3 (offline_vault.db).
 """
 
 import hashlib
+import json
 import os
 import secrets
 import sqlite3
@@ -116,6 +117,23 @@ class DatabaseManager:
                         );
                         """
                     )
+                # Ensure new v2.0 3-Pose Neural Biometric columns exist in SQLite
+                existing_cols = {
+                    row[1] for row in conn.execute("PRAGMA table_info(authorized_dongles)").fetchall()
+                }
+                migrations = [
+                    ("face_embedding_front", "TEXT"),
+                    ("face_embedding_left", "TEXT"),
+                    ("face_embedding_right", "TEXT"),
+                    ("biometric_model", "VARCHAR(64) DEFAULT 'YuNet+SFace-128D-3Pose'"),
+                    ("biometric_updated_at", "TIMESTAMP"),
+                ]
+                for col_name, col_type in migrations:
+                    if col_name not in existing_cols:
+                        try:
+                            conn.execute(f"ALTER TABLE authorized_dongles ADD COLUMN {col_name} {col_type}")
+                        except Exception:
+                            pass
                 conn.commit()
                 self._log(f"SQLite local vault initialized at {self.sqlite_path.name}", "INFO")
             finally:
@@ -165,10 +183,11 @@ class DatabaseManager:
         token_sig = "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"
 
         seed_face_path = Path(__file__).resolve().parent / "default_face_seed.hex"
+        default_face = ""
         if seed_face_path.exists():
-            default_face = seed_face_path.read_text(encoding="utf-8").strip()
-        else:
-            default_face = hashlib.sha256(b"LEXVAULT_BIOMETRIC_ENROLLED_V1").hexdigest()
+            seed_content = seed_face_path.read_text(encoding="utf-8").strip()
+            if seed_content.startswith("LXV_SFACE_V3:"):
+                default_face = seed_content
 
         self.register_dongle(
             serial_number=default_serial,
@@ -180,6 +199,24 @@ class DatabaseManager:
             face_profile_hash=default_face,
             is_active=True,
         )
+
+    @staticmethod
+    def _unpack_multipose_columns(face_profile_hash: Optional[str]) -> Tuple[str, str, str, str]:
+        """
+        Extracts individual (front, left, right, model) strings from an LXV_SFACE_V3 bundle.
+        """
+        if not face_profile_hash or not face_profile_hash.startswith("LXV_SFACE_V3:"):
+            return "", "", "", "YuNet+SFace-128D-3Pose"
+        try:
+            data = json.loads(face_profile_hash[len("LXV_SFACE_V3:"):])
+            poses = data.get("poses", data)
+            front = str(poses.get("front") or "")
+            left = str(poses.get("left") or "")
+            right = str(poses.get("right") or "")
+            model = str(data.get("model") or "YuNet+SFace-128D-3Pose")
+            return front, left, right, model
+        except Exception:
+            return "", "", "", "YuNet+SFace-128D-3Pose"
 
     # =========================================================================
     # DONGLE & AUTHENTICATION PERSISTENCE
@@ -196,7 +233,8 @@ class DatabaseManager:
         is_active: bool = True,
     ) -> bool:
         now_iso = datetime.now(timezone.utc).isoformat()
-        payload = {
+        front_emb, left_emb, right_emb, bio_model = self._unpack_multipose_columns(face_profile_hash)
+        base_payload = {
             "serial_number": serial_number,
             "operator_name": operator_name,
             "badge_id": badge_id,
@@ -207,18 +245,43 @@ class DatabaseManager:
             "is_active": bool(is_active),
             "registered_at": now_iso,
         }
+        extended_payload = {
+            **base_payload,
+            "face_embedding_front": front_emb,
+            "face_embedding_left": left_emb,
+            "face_embedding_right": right_emb,
+            "biometric_model": bio_model,
+            "biometric_updated_at": now_iso,
+        }
 
         if self.supabase_client is None and self.supabase_url and self.supabase_key:
             self._init_supabase()
 
         if self.supabase_client is not None:
             try:
-                self.supabase_client.table("authorized_dongles").upsert(payload).execute()
+                self.supabase_client.table("authorized_dongles").upsert(extended_payload).execute()
                 self.cloud_online = True
-                self._log(f"Supabase Cloud: Dongle '{serial_number}' ({operator_name}) tersimpan ke Cloud.", "SUCCESS")
-            except Exception as exc:
-                self.cloud_online = False
-                self._log(f"Supabase write failed ({exc}), persisting to local SQLite.", "WARN")
+                self._log(f"Supabase Cloud: Dongle '{serial_number}' ({operator_name}) tersimpan lengkap ke Cloud.", "SUCCESS")
+            except Exception:
+                try:
+                    self.supabase_client.table("authorized_dongles").upsert(base_payload).execute()
+                    self.cloud_online = True
+                    self._log(f"Supabase Cloud: Dongle '{serial_number}' ({operator_name}) tersimpan ke Cloud.", "SUCCESS")
+                except Exception:
+                    try:
+                        # Fallback if Supabase column face_profile_hash is VARCHAR(128)
+                        compact_hash = (
+                            "LXV_SFACE_V3_SHA:" + hashlib.sha256((face_profile_hash or "").encode("utf-8")).hexdigest()[:48]
+                            if (face_profile_hash and len(face_profile_hash) > 120)
+                            else (face_profile_hash or "")
+                        )
+                        compact_payload = {**base_payload, "face_profile_hash": compact_hash}
+                        self.supabase_client.table("authorized_dongles").upsert(compact_payload).execute()
+                        self.cloud_online = True
+                        self._log(f"Supabase Cloud: Dongle '{serial_number}' tersimpan (compact VARCHAR(128) mode).", "SUCCESS")
+                    except Exception as exc:
+                        self.cloud_online = False
+                        self._log(f"Supabase write failed ({exc}), persisting to local SQLite.", "WARN")
 
         with self._lock:
             conn = self._get_sqlite_conn()
@@ -227,8 +290,10 @@ class DatabaseManager:
                     """
                     INSERT OR REPLACE INTO authorized_dongles (
                         serial_number, operator_name, badge_id, token_signature,
-                        password_salt, password_hash, face_profile_hash, is_active, registered_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        password_salt, password_hash, face_profile_hash,
+                        face_embedding_front, face_embedding_left, face_embedding_right,
+                        biometric_model, biometric_updated_at, is_active, registered_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         serial_number,
@@ -238,6 +303,11 @@ class DatabaseManager:
                         password_salt,
                         password_hash,
                         face_profile_hash or "",
+                        front_emb,
+                        left_emb,
+                        right_emb,
+                        bio_model,
+                        now_iso,
                         1 if is_active else 0,
                         now_iso,
                     ),
@@ -248,6 +318,26 @@ class DatabaseManager:
                 conn.close()
 
     def get_dongle(self, serial_number: str) -> Optional[Dict[str, Any]]:
+        local_result: Optional[Dict[str, Any]] = None
+        with self._lock:
+            conn = self._get_sqlite_conn()
+            try:
+                cur = conn.execute(
+                    "SELECT * FROM authorized_dongles WHERE serial_number = ?",
+                    (serial_number,),
+                )
+                row = cur.fetchone()
+                if row:
+                    local_result = dict(row)
+                    local_result["is_active"] = bool(local_result.get("is_active", 0))
+            finally:
+                conn.close()
+
+        # If local SQLite already has the full LXV_SFACE_V3 3-pose neural profile, return immediately
+        # (prevents 30 FPS webcam lag and prevents Supabase VARCHAR(128) 'EMPTY' from overwriting valid local V3 vectors)
+        if local_result and str(local_result.get("face_profile_hash") or "").startswith("LXV_SFACE_V3:"):
+            return local_result
+
         if self.cloud_online and self.supabase_client is not None:
             try:
                 resp = (
@@ -258,28 +348,33 @@ class DatabaseManager:
                     .execute()
                 )
                 if resp.data:
-                    row = dict(resp.data[0])
-                    row["is_active"] = bool(row.get("is_active", False))
-                    return row
+                    cloud_row = dict(resp.data[0])
+                    cloud_row["is_active"] = bool(cloud_row.get("is_active", False))
+                    # Merge local face_profile_hash if cloud only has EMPTY or compact SHA reference
+                    cloud_face = str(cloud_row.get("face_profile_hash") or "")
+                    if not cloud_face.startswith("LXV_SFACE_V3:"):
+                        if local_result and str(local_result.get("face_profile_hash") or "").startswith("LXV_SFACE_V3:"):
+                            cloud_row["face_profile_hash"] = local_result["face_profile_hash"]
+                        else:
+                            seed_p = Path(__file__).resolve().parent / "default_face_seed.hex"
+                            if seed_p.exists():
+                                seed_txt = seed_p.read_text(encoding="utf-8").strip()
+                                if seed_txt.startswith("LXV_SFACE_V3:"):
+                                    cloud_row["face_profile_hash"] = seed_txt
+                    return cloud_row
             except Exception as exc:
                 self.cloud_online = False
                 self._log(f"Supabase read timeout/error ({exc}), reading from SQLite.", "WARN")
 
-        with self._lock:
-            conn = self._get_sqlite_conn()
-            try:
-                cur = conn.execute(
-                    "SELECT * FROM authorized_dongles WHERE serial_number = ?",
-                    (serial_number,),
-                )
-                row = cur.fetchone()
-                if not row:
-                    return None
-                result = dict(row)
-                result["is_active"] = bool(result.get("is_active", 0))
-                return result
-            finally:
-                conn.close()
+        if local_result:
+            if not str(local_result.get("face_profile_hash") or "").startswith("LXV_SFACE_V3:"):
+                seed_p = Path(__file__).resolve().parent / "default_face_seed.hex"
+                if seed_p.exists():
+                    seed_txt = seed_p.read_text(encoding="utf-8").strip()
+                    if seed_txt.startswith("LXV_SFACE_V3:"):
+                        local_result["face_profile_hash"] = seed_txt
+            return local_result
+        return None
 
     def list_dongles(self) -> List[Dict[str, Any]]:
         with self._lock:
@@ -320,34 +415,82 @@ class DatabaseManager:
                 conn.close()
 
     def update_dongle_face_profile(self, serial_number: str, face_profile_hash: str) -> bool:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        front_emb, left_emb, right_emb, bio_model = self._unpack_multipose_columns(face_profile_hash)
+        extended_update = {
+            "face_profile_hash": face_profile_hash,
+            "face_embedding_front": front_emb,
+            "face_embedding_left": left_emb,
+            "face_embedding_right": right_emb,
+            "biometric_model": bio_model,
+            "biometric_updated_at": now_iso,
+        }
+
         if self.supabase_client is None and self.supabase_url and self.supabase_key:
             self._init_supabase()
 
         if self.supabase_client is not None:
             try:
                 res = self.supabase_client.table("authorized_dongles").update(
-                    {"face_profile_hash": face_profile_hash}
+                    extended_update
                 ).eq("serial_number", serial_number).execute()
                 if res.data:
                     self.cloud_online = True
-                    self._log(f"Supabase Cloud: Profil wajah berhasil disimpan untuk dongle '{serial_number}'.", "SUCCESS")
-                else:
-                    self._log(f"Supabase Cloud: Dongle '{serial_number}' tidak ditemukan di tabel Supabase.", "WARN")
-            except Exception as exc:
-                self.cloud_online = False
-                self._log(f"Supabase face profile update failed ({exc}); saving to SQLite.", "WARN")
+                    self._log(f"Supabase Cloud: Profil 3-Pose SFace berhasil disimpan untuk '{serial_number}'.", "SUCCESS")
+            except Exception:
+                try:
+                    res = self.supabase_client.table("authorized_dongles").update(
+                        {"face_profile_hash": face_profile_hash}
+                    ).eq("serial_number", serial_number).execute()
+                    if res.data:
+                        self.cloud_online = True
+                        self._log(f"Supabase Cloud: Profil wajah berhasil disimpan untuk dongle '{serial_number}'.", "SUCCESS")
+                except Exception:
+                    try:
+                        # Fallback if Supabase column face_profile_hash is VARCHAR(128)
+                        compact_hash = (
+                            "LXV_SFACE_V3_SHA:" + hashlib.sha256((face_profile_hash or "").encode("utf-8")).hexdigest()[:48]
+                            if (face_profile_hash and len(face_profile_hash) > 120)
+                            else (face_profile_hash or "")
+                        )
+                        res = self.supabase_client.table("authorized_dongles").update(
+                            {"face_profile_hash": compact_hash}
+                        ).eq("serial_number", serial_number).execute()
+                        self.cloud_online = True
+                        self._log(f"Supabase Cloud: Profil wajah tersimpan (compact VARCHAR(128) digest) untuk '{serial_number}'.", "SUCCESS")
+                    except Exception as exc:
+                        self.cloud_online = False
+                        self._log(f"Supabase face profile update failed ({exc}); saving to SQLite.", "WARN")
+
+        target_serials = [serial_number]
+        if serial_number in ("LXV-USB-484BC196", "LEXVAULT-DEV-DONGLE-001"):
+            target_serials = ["LXV-USB-484BC196", "LEXVAULT-DEV-DONGLE-001"]
 
         with self._lock:
             conn = self._get_sqlite_conn()
             try:
-                conn.execute(
-                    """
-                    UPDATE authorized_dongles
-                    SET face_profile_hash = ?
-                    WHERE serial_number = ?
-                    """,
-                    (face_profile_hash, serial_number),
-                )
+                for tgt_s in target_serials:
+                    conn.execute(
+                        """
+                        UPDATE authorized_dongles
+                        SET face_profile_hash = ?,
+                            face_embedding_front = ?,
+                            face_embedding_left = ?,
+                            face_embedding_right = ?,
+                            biometric_model = ?,
+                            biometric_updated_at = ?
+                        WHERE serial_number = ?
+                        """,
+                        (
+                            face_profile_hash,
+                            front_emb,
+                            left_emb,
+                            right_emb,
+                            bio_model,
+                            now_iso,
+                            tgt_s,
+                        ),
+                    )
                 conn.commit()
                 return True
             finally:

@@ -871,7 +871,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         ctk.CTkButton(
             right_col,
-            text="◉ NYALAKAN KAMERA",
+            text="◉ NYALAKAN KAMERA (SCAN 3-POSE)",
             font=get_mono_font(12, "bold"),
             height=36,
             fg_color=COLOR_PRIMARY,
@@ -881,7 +881,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         ctk.CTkButton(
             right_col,
-            text="📸 PERBARUI WAJAH SAYA KE DATABASE",
+            text="📸 KUNCI POSE / PERBARUI WAJAH",
             font=get_mono_font(12, "bold"),
             height=38,
             fg_color=COLOR_EMERALD,
@@ -921,21 +921,57 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         ).pack(fill="x", padx=14, pady=(0, 8))
 
     def _refresh_tab5_operator_info(self) -> None:
-        serial = self.active_dongle.serial_number if self.active_dongle else os.getenv("LEXVAULT_DEFAULT_DONGLE_SERIAL", "LEXVAULT-DEV-DONGLE-001")
+        serial = self.active_dongle.serial_number if self.active_dongle else os.getenv("LEXVAULT_DEFAULT_DONGLE_SERIAL", "LXV-USB-484BC196")
         rec = self.db_manager.get_dongle(serial) or {}
         face_hash = str(rec.get("face_profile_hash") or "").strip()
-        has_face = bool(face_hash and face_hash not in ("EMPTY", "NONE") and len(face_hash) > 30)
+        has_v3_face = face_hash.startswith("LXV_SFACE_V3:")
         info = (
             f"OPERATOR AKTIF : {rec.get('operator_name', 'N/A')}\n"
             f"BADGE ID       : {rec.get('badge_id', 'N/A')}\n"
             f"SERIAL TOKEN   : {serial}\n"
-            f"STATUS WAJAH   : {'TERDAFTAR & AKTIF (V2)' if has_face else 'BELUM TERDAFTAR (PERLU UPDATE)'}\n"
+            f"STATUS WAJAH   : {'3-POSE SFACE 128D AKTIF' if has_v3_face else 'PERLU ENROLL 3-POSE BARU'}\n"
             f"DATABASE SYNC  : {'SUPABASE + SQLITE' if self.db_manager.cloud_online else 'OFFLINE SQLITE'}"
         )
         self.txt_tab5_profile.configure(state="normal")
         self.txt_tab5_profile.delete("1.0", "end")
         self.txt_tab5_profile.insert("1.0", info)
         self.txt_tab5_profile.configure(state="disabled")
+
+    def _tab5_get_next_pose(self) -> Optional[str]:
+        poses = getattr(self, "_tab5_poses", {"FRONT": None, "LEFT": None, "RIGHT": None})
+        for k in ("FRONT", "LEFT", "RIGHT"):
+            if poses.get(k) is None:
+                return k
+        return None
+
+    def _tab5_finalize_multipose(self) -> None:
+        if not self.auth_gate:
+            return
+        serial = self.active_dongle.serial_number if self.active_dongle else os.getenv("LEXVAULT_DEFAULT_DONGLE_SERIAL", "LXV-USB-484BC196")
+        rec = self.db_manager.get_dongle(serial) or {}
+        op_name = rec.get("operator_name", "Operator Aktif")
+
+        poses = getattr(self, "_tab5_poses", {})
+        ok, msg = self.auth_gate.enroll_multipose_profile(
+            serial,
+            str(poses.get("FRONT") or ""),
+            str(poses.get("LEFT") or ""),
+            str(poses.get("RIGHT") or ""),
+        )
+        if ok:
+            self.log(f"Pembaruan 3-Pose Face ID berhasil untuk '{op_name}': {msg}", "SUCCESS")
+            self.lbl_tab5_status.set_status(f"3-POSE DISIMPAN ({op_name})", "SUCCESS")
+            self._refresh_tab5_operator_info()
+            self._tab5_stop_cam()
+            self.tab5_cam_label.configure(
+                text=f"[ 3-POSE FACE ID BERHASIL DIPERBARUI KE DATABASE ]\nOperator: {op_name} (DEPAN ✓ | KIRI ✓ | KANAN ✓)",
+                text_color=COLOR_EMERALD,
+            )
+        else:
+            self._tab5_poses = {"FRONT": None, "LEFT": None, "RIGHT": None}
+            self._tab5_hold_count = 0
+            self.log(f"Gagal memperbarui 3-Pose biometrik: {msg}", "ERROR")
+            self.lbl_tab5_status.set_status("GAGAL: ULANGI SCAN 3-POSE", "DANGER")
 
     def _tab5_start_cam(self) -> None:
         if not OPENCV_AVAILABLE or cv2 is None:
@@ -945,6 +981,8 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         if self._cam_running:
             return
         try:
+            self._tab5_poses = {"FRONT": None, "LEFT": None, "RIGHT": None}
+            self._tab5_hold_count = 0
             self._cam_cap = cv2.VideoCapture(0)
             if not self._cam_cap or not self._cam_cap.isOpened():
                 self._tab5_stop_cam()
@@ -955,7 +993,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
                 )
                 return
             self._cam_running = True
-            self.lbl_tab5_status.set_status("CAMERA ACTIVE - POSITION FACE", "INFO")
+            self.lbl_tab5_status.set_status("TAHAP 1/3: HADAP DEPAN", "INFO")
             self._tab5_poll_frame()
         except Exception as exc:
             self.log(f"Error kamera Tab 5: {exc}", "ERROR")
@@ -967,9 +1005,44 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         if not ret or frame is None:
             self._tab5_stop_cam()
             return
+        frame = cv2.flip(frame, 1)
         self._last_raw_frame = frame.copy()
+
+        needed_pose = self._tab5_get_next_pose()
         if self.auth_gate:
-            detected, ann, _, _ = self.auth_gate.detect_face_in_frame(frame)
+            detected, ann, _, bbox = self.auth_gate.detect_face_in_frame(frame, target_pose=needed_pose)
+            cur_pose, _ = self.auth_gate.get_last_detected_pose()
+            is_masked, _ = self.auth_gate.is_face_masked(frame, bbox) if detected else (False, 1.0)
+
+            poses = getattr(self, "_tab5_poses", {"FRONT": None, "LEFT": None, "RIGHT": None})
+            f_m = "✓" if poses.get("FRONT") else "✗"
+            l_m = "✓" if poses.get("LEFT") else "✗"
+            r_m = "✓" if poses.get("RIGHT") else "✗"
+            pose_labels = {"FRONT": "HADAP DEPAN", "LEFT": "TENGOK KIRI", "RIGHT": "TENGOK KANAN"}
+
+            if is_masked:
+                self._tab5_hold_count = 0
+                self.lbl_tab5_status.set_status("MASKER TERDETEKSI! LEPAS MASKER", "DANGER")
+            elif needed_pose and detected and cur_pose == needed_pose:
+                self._tab5_hold_count = getattr(self, "_tab5_hold_count", 0) + 1
+                self.lbl_tab5_status.set_status(
+                    f"MENGUNCI {pose_labels[needed_pose]} ({self._tab5_hold_count}/3) [D:{f_m} K:{l_m} KN:{r_m}]",
+                    "SUCCESS",
+                )
+                if self._tab5_hold_count >= 3:
+                    vec = self.auth_gate.extract_face_feature_vector(frame, bbox)
+                    if vec:
+                        self._tab5_poses[needed_pose] = vec
+                        self._tab5_hold_count = 0
+                        if self._tab5_get_next_pose() is None:
+                            self._tab5_finalize_multipose()
+                            return
+            elif needed_pose:
+                self._tab5_hold_count = max(0, getattr(self, "_tab5_hold_count", 0) - 1)
+                self.lbl_tab5_status.set_status(
+                    f"ARAHKAN: {pose_labels[needed_pose]} [D:{f_m} K:{l_m} KN:{r_m}]",
+                    "INFO",
+                )
         else:
             ann = frame
 
@@ -1008,31 +1081,37 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
     def _tab5_enroll_face(self) -> None:
         if not self._cam_running or self._last_raw_frame is None:
-            self.log("Nyalakan kamera terlebih dahulu untuk merekam pembaruan wajah.", "WARN")
+            self.log("Nyalakan kamera terlebih dahulu untuk merekam pembaruan wajah 3-pose.", "WARN")
             self.lbl_tab5_status.set_status("START CAMERA FIRST", "WARN")
             return
         if not self.auth_gate:
             return
 
-        serial = self.active_dongle.serial_number if self.active_dongle else os.getenv("LEXVAULT_DEFAULT_DONGLE_SERIAL", "LEXVAULT-DEV-DONGLE-001")
-        rec = self.db_manager.get_dongle(serial) or {}
-        op_name = rec.get("operator_name", "Operator Aktif")
+        needed_pose = self._tab5_get_next_pose()
+        if not needed_pose:
+            self._tab5_finalize_multipose()
+            return
 
         detected, _, _, bbox = self.auth_gate.detect_face_in_frame(self._last_raw_frame)
         if not detected or bbox[2] < 30 or bbox[3] < 30:
-            self.log("Wajah tidak terdeteksi dengan jelas. Hadapkan wajah tegak ke kamera.", "WARN")
+            self.log("Wajah tidak terdeteksi dengan jelas. Hadapkan wajah ke kamera.", "WARN")
             self.lbl_tab5_status.set_status("FACE NOT CLEAR", "WARN")
             return
 
-        ok, msg = self.auth_gate.enroll_face_profile(serial, self._last_raw_frame, bbox)
-        if ok:
-            self.log(f"Pembaruan wajah berhasil: Profil biometrik operator '{op_name}' tersimpan di database.", "SUCCESS")
-            self.lbl_tab5_status.set_status(f"WAJAH DIPERBARUI ({op_name})", "SUCCESS")
-            self._refresh_tab5_operator_info()
-            self._tab5_stop_cam()
-        else:
-            self.log(f"Gagal memperbarui biometrik: {msg}", "ERROR")
-            self.lbl_tab5_status.set_status("UPDATE WAJAH GAGAL", "DANGER")
+        is_masked, _ = self.auth_gate.is_face_masked(self._last_raw_frame, bbox)
+        if is_masked:
+            self.log("Masker terdeteksi! Lepas masker terlebih dahulu.", "WARN")
+            self.lbl_tab5_status.set_status("REMOVE MASK FIRST", "DANGER")
+            return
+
+        vec = self.auth_gate.extract_face_feature_vector(self._last_raw_frame, bbox)
+        if vec:
+            if not hasattr(self, "_tab5_poses"):
+                self._tab5_poses = {"FRONT": None, "LEFT": None, "RIGHT": None}
+            self._tab5_poses[needed_pose] = vec
+            self._tab5_hold_count = 0
+            if self._tab5_get_next_pose() is None:
+                self._tab5_finalize_multipose()
 
     def _tab5_change_password_dialog(self) -> None:
         serial = self.active_dongle.serial_number if self.active_dongle else os.getenv("LEXVAULT_DEFAULT_DONGLE_SERIAL", "LEXVAULT-DEV-DONGLE-001")
@@ -1124,15 +1203,19 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         entry_pwd = ctk.CTkEntry(scroll, placeholder_text="Setel password awal...", show="•", font=get_mono_font(11))
         entry_pwd.pack(fill="x", pady=(2, 10))
 
-        # 5. Face Camera Capture
-        ctk.CTkLabel(scroll, text="5. Rekam Biometrik Wajah Operator Baru (Wajib):", font=get_mono_font(11, "bold")).pack(anchor="w")
+        # 5. Face Camera Capture (3-Pose: DEPAN, KIRI, KANAN)
+        ctk.CTkLabel(
+            scroll,
+            text="5. Rekam 3-Pose Biometrik Wajah (Depan, Kiri, Kanan - Wajib):",
+            font=get_mono_font(11, "bold"),
+        ).pack(anchor="w")
 
         cam_box = ctk.CTkFrame(scroll, fg_color=COLOR_SURFACE_DARK, border_color=COLOR_BORDER, border_width=1, corner_radius=6)
         cam_box.pack(fill="x", pady=(4, 8))
 
         cam_preview = ctk.CTkLabel(
             cam_box,
-            text="[ KAMERA STANDBY ]\nKlik 'NYALAKAN KAMERA' untuk merekam wajah operator baru",
+            text="[ KAMERA 3-POSE STANDBY ]\nKlik 'MULAI SCAN 3-POSE' lalu ikuti: DEPAN ➔ KIRI ➔ KANAN",
             font=get_mono_font(11, "bold"),
             text_color=COLOR_TEXT_MUTED,
             height=180,
@@ -1145,12 +1228,14 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
             "after_id": None,
             "last_frame": None,
             "captured_vector": None,
+            "poses": {"FRONT": None, "LEFT": None, "RIGHT": None},
+            "hold_count": 0,
             "ctk_img": None,
         }
 
         lbl_face_status = ctk.CTkLabel(
             scroll,
-            text="⚠️ STATUS BIOMETRIK: BELUM DIAMBIL (WAJIB)",
+            text="⚠️ TAHAP [0/3]: BELUM DIREKAM (DEPAN: ✗ | KIRI: ✗ | KANAN: ✗)",
             font=get_mono_font(11, "bold"),
             text_color=COLOR_AMBER,
         )
@@ -1177,6 +1262,37 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
                 pass
             dialog_cam_state["ctk_img"] = None
 
+        def _get_next_pose_new_user() -> Optional[str]:
+            for k in ("FRONT", "LEFT", "RIGHT"):
+                if dialog_cam_state["poses"][k] is None:
+                    return k
+            return None
+
+        def _finalize_new_user_3pose():
+            if not self.auth_gate:
+                return
+            ok_c, bundle_str, msg_c = self.auth_gate.combine_multipose_vectors(
+                dialog_cam_state["poses"]["FRONT"],
+                dialog_cam_state["poses"]["LEFT"],
+                dialog_cam_state["poses"]["RIGHT"],
+            )
+            if not ok_c:
+                dialog_cam_state["poses"] = {"FRONT": None, "LEFT": None, "RIGHT": None}
+                dialog_cam_state["hold_count"] = 0
+                lbl_face_status.configure(text=f"⚠️ {msg_c}", text_color=COLOR_CRIMSON)
+                return
+
+            dialog_cam_state["captured_vector"] = bundle_str
+            lbl_face_status.configure(
+                text="✓ 3-POSE FACE ID TERKUNCI [DEPAN: ✓ | KIRI: ✓ | KANAN: ✓]",
+                text_color=COLOR_EMERALD,
+            )
+            _stop_new_user_cam()
+            cam_preview.configure(
+                text="[ 3-POSE NEURAL FACE ID BERHASIL DIREKAM & TERKUNCI ]\n(DEPAN ✓ | KIRI ✓ | KANAN ✓)",
+                text_color=COLOR_EMERALD,
+            )
+
         def _poll_new_user_cam():
             if not dialog_cam_state["running"] or dialog_cam_state["cap"] is None:
                 return
@@ -1185,9 +1301,43 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
                 _stop_new_user_cam()
                 return
 
+            frame = cv2.flip(frame, 1)
             dialog_cam_state["last_frame"] = frame.copy()
+            needed_pose = _get_next_pose_new_user()
+
             if self.auth_gate:
-                detected, ann, _, _ = self.auth_gate.detect_face_in_frame(frame)
+                detected, ann, _, bbox = self.auth_gate.detect_face_in_frame(frame, target_pose=needed_pose)
+                cur_pose, _ = self.auth_gate.get_last_detected_pose()
+                is_masked, _ = self.auth_gate.is_face_masked(frame, bbox) if detected else (False, 1.0)
+
+                f_m = "✓" if dialog_cam_state["poses"]["FRONT"] else "✗"
+                l_m = "✓" if dialog_cam_state["poses"]["LEFT"] else "✗"
+                r_m = "✓" if dialog_cam_state["poses"]["RIGHT"] else "✗"
+                pose_names_id = {"FRONT": "LURUS KE DEPAN", "LEFT": "SEDIKIT KE KIRI", "RIGHT": "SEDIKIT KE KANAN"}
+
+                if is_masked:
+                    dialog_cam_state["hold_count"] = 0
+                    lbl_face_status.configure(text="⚠️ MASKER TERDETEKSI! Lepas masker wajah Anda.", text_color=COLOR_CRIMSON)
+                elif needed_pose and detected and cur_pose == needed_pose:
+                    dialog_cam_state["hold_count"] += 1
+                    lbl_face_status.configure(
+                        text=f"◉ MENGUNCI POSE {pose_names_id[needed_pose]} ({dialog_cam_state['hold_count']}/3) [D:{f_m} K:{l_m} KN:{r_m}]",
+                        text_color=COLOR_EMERALD,
+                    )
+                    if dialog_cam_state["hold_count"] >= 3:
+                        vec = self.auth_gate.extract_face_feature_vector(frame, bbox)
+                        if vec:
+                            dialog_cam_state["poses"][needed_pose] = vec
+                            dialog_cam_state["hold_count"] = 0
+                            if _get_next_pose_new_user() is None:
+                                _finalize_new_user_3pose()
+                                return
+                elif needed_pose:
+                    dialog_cam_state["hold_count"] = max(0, dialog_cam_state["hold_count"] - 1)
+                    lbl_face_status.configure(
+                        text=f"➔ ARAHKAN WAJAH {pose_names_id[needed_pose]} [D:{f_m} | K:{l_m} | KN:{r_mark if 'r_mark' in locals() else r_m}]",
+                        text_color=COLOR_PRIMARY,
+                    )
             else:
                 ann = frame
 
@@ -1205,13 +1355,16 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
             if dialog_cam_state["running"]:
                 return
             try:
+                dialog_cam_state["poses"] = {"FRONT": None, "LEFT": None, "RIGHT": None}
+                dialog_cam_state["captured_vector"] = None
+                dialog_cam_state["hold_count"] = 0
                 dialog_cam_state["cap"] = cv2.VideoCapture(0)
                 if not dialog_cam_state["cap"] or not dialog_cam_state["cap"].isOpened():
                     _stop_new_user_cam()
                     lbl_face_status.configure(text="Kamera tidak dapat dibuka! Cek izin sistem.", text_color=COLOR_CRIMSON)
                     return
                 dialog_cam_state["running"] = True
-                lbl_face_status.configure(text="◉ KAMERA AKTIF: Posisikan wajah di tengah...", text_color=COLOR_PRIMARY)
+                lbl_face_status.configure(text="◉ TAHAP 1/3: Hadapkan wajah LURUS KE DEPAN...", text_color=COLOR_PRIMARY)
                 _poll_new_user_cam()
             except Exception as exc:
                 lbl_face_status.configure(text=f"Error kamera: {exc}", text_color=COLOR_CRIMSON)
@@ -1222,31 +1375,33 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
                 return
             if not self.auth_gate:
                 return
+            needed_pose = _get_next_pose_new_user()
+            if not needed_pose:
+                _finalize_new_user_3pose()
+                return
 
             detected, _, _, bbox = self.auth_gate.detect_face_in_frame(dialog_cam_state["last_frame"])
             if not detected or bbox[2] < 30 or bbox[3] < 30:
                 lbl_face_status.configure(text="Wajah belum terdeteksi jelas! Dekatkan wajah.", text_color=COLOR_CRIMSON)
                 return
-
-            vec = self.auth_gate.extract_face_feature_vector(dialog_cam_state["last_frame"], bbox)
-            if not vec:
-                lbl_face_status.configure(text="Gagal mengekstrak vektor biometrik wajah!", text_color=COLOR_CRIMSON)
+            is_masked, _ = self.auth_gate.is_face_masked(dialog_cam_state["last_frame"], bbox)
+            if is_masked:
+                lbl_face_status.configure(text="Lepas masker terlebih dahulu!", text_color=COLOR_CRIMSON)
                 return
 
-            dialog_cam_state["captured_vector"] = vec
-            lbl_face_status.configure(
-                text=f"✓ WAJAH OPERATOR TERKUNCI & TERDAFTAR [{bbox[2]}x{bbox[3]}px]",
-                text_color=COLOR_EMERALD,
-            )
-            _stop_new_user_cam()
-            cam_preview.configure(text="[ FOTO WAJAH BERHASIL DIAMBIL & TERKUNCI ]", text_color=COLOR_EMERALD)
+            vec = self.auth_gate.extract_face_feature_vector(dialog_cam_state["last_frame"], bbox)
+            if vec:
+                dialog_cam_state["poses"][needed_pose] = vec
+                dialog_cam_state["hold_count"] = 0
+                if _get_next_pose_new_user() is None:
+                    _finalize_new_user_3pose()
 
         cam_btn_row = ctk.CTkFrame(scroll, fg_color="transparent")
         cam_btn_row.pack(fill="x", pady=(0, 10))
         ctk.CTkButton(
             cam_btn_row,
-            text="◉ NYALAKAN KAMERA",
-            width=140,
+            text="◉ MULAI SCAN 3-POSE",
+            width=155,
             fg_color=COLOR_PRIMARY,
             hover_color=COLOR_PRIMARY_HOVER,
             command=_start_new_user_cam,
@@ -1254,7 +1409,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         ).pack(side="left", padx=(0, 8))
         ctk.CTkButton(
             cam_btn_row,
-            text="📸 AMBIL FOTO WAJAH",
+            text="📸 KUNCI POSE SAAT INI",
             fg_color=COLOR_EMERALD,
             hover_color="#059669",
             text_color="#052E16",

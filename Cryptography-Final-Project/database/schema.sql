@@ -4,7 +4,7 @@
 -- Standard Compliance: ISO/IEC 27037 Digital Chain of Custody
 -- ============================================================================
 
--- 1. Authorized Hardware Security Dongles & Operator Credentials
+-- 1. Authorized Hardware Security Dongles & 3-Pose Neural Biometric Credentials
 CREATE TABLE IF NOT EXISTS authorized_dongles (
     serial_number VARCHAR(128) PRIMARY KEY,
     operator_name VARCHAR(128) NOT NULL,
@@ -13,9 +13,26 @@ CREATE TABLE IF NOT EXISTS authorized_dongles (
     password_salt VARCHAR(64) NOT NULL,
     password_hash VARCHAR(128) NOT NULL,
     face_profile_hash TEXT,
+    face_embedding_front TEXT,
+    face_embedding_left TEXT,
+    face_embedding_right TEXT,
+    biometric_model VARCHAR(64) DEFAULT 'YuNet+SFace-128D-3Pose',
+    biometric_updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     registered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- ============================================================================
+-- MIGRATION SCRIPT UNTUK SUPABASE SQL EDITOR (Jika tabel sudah dibuat sebelumnya):
+-- Copy & Run perintah di bawah ini pada menu SQL Editor di Dashboard Supabase:
+--
+-- ALTER TABLE authorized_dongles ALTER COLUMN face_profile_hash TYPE TEXT;
+-- ALTER TABLE authorized_dongles ADD COLUMN IF NOT EXISTS face_embedding_front TEXT;
+-- ALTER TABLE authorized_dongles ADD COLUMN IF NOT EXISTS face_embedding_left TEXT;
+-- ALTER TABLE authorized_dongles ADD COLUMN IF NOT EXISTS face_embedding_right TEXT;
+-- ALTER TABLE authorized_dongles ADD COLUMN IF NOT EXISTS biometric_model VARCHAR(64) DEFAULT 'YuNet+SFace-128D-3Pose';
+-- ALTER TABLE authorized_dongles ADD COLUMN IF NOT EXISTS biometric_updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+-- ============================================================================
 
 -- 2. Forensic Evidence Custody Records
 -- Stores ONLY cryptographic metadata, hashes, IV/Nonce, and ciphertext/paths

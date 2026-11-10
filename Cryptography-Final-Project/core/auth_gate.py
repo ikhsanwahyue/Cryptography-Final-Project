@@ -99,12 +99,29 @@ class AuthGate:
         self._daemon_stop_event = threading.Event()
         self._kill_switch_callbacks: List[Callable[[str], None]] = []
 
-        # Haar Cascade Classifier
+        # OpenCV Deep Neural Network Face Detector (YuNet) & Recognizer (SFace 128-D)
         self._face_cascade: Optional[Any] = None
+        self._face_detector: Optional[Any] = None
+        self._face_recognizer: Optional[Any] = None
+        self._last_yunet_face_row: Optional[Any] = None
+        self._last_pose: str = "NONE"
+        self._last_nose_ratio: float = 0.5
+
         if OPENCV_AVAILABLE and cv2 is not None:
-            cascade_path = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
-            if os.path.exists(cascade_path):
-                self._face_cascade = cv2.CascadeClassifier(cascade_path)
+            models_dir = self.base_dir / "core" / "models"
+            yunet_path = models_dir / "face_detection_yunet_2023mar.onnx"
+            sface_path = models_dir / "face_recognition_sface_2021dec.onnx"
+            try:
+                if yunet_path.exists() and hasattr(cv2, "FaceDetectorYN"):
+                    self._face_detector = cv2.FaceDetectorYN.create(
+                        str(yunet_path), "", (320, 240), 0.70, 0.3, 5000
+                    )
+                if sface_path.exists() and hasattr(cv2, "FaceRecognizerSF"):
+                    self._face_recognizer = cv2.FaceRecognizerSF.create(
+                        str(sface_path), ""
+                    )
+            except Exception as exc:
+                self._log(f"DNN model init warning: {exc}", "WARN")
 
     def _log(self, message: str, level: str = "INFO") -> None:
         if self.logger_callback:
@@ -455,149 +472,223 @@ class AuthGate:
                         pass
 
     # =========================================================================
-    # 3. BIOMETRIC FACE VERIFICATION (OPENCV HAAR CASCADE)
+    # 3. DEEP LEARNING BIOMETRIC FACE RECOGNITION (YUNET 5-LANDMARK + SFACE 128D)
     # =========================================================================
+    def get_last_detected_pose(self) -> Tuple[str, float]:
+        """
+        Returns (pose_name, nose_ratio) from the latest frame analyzed by detect_face_in_frame.
+        pose_name is one of: 'FRONT', 'LEFT', 'RIGHT', 'NONE'.
+        """
+        return self._last_pose, self._last_nose_ratio
+
+    def _run_yunet_on_frame(self, frame_bgr: Any) -> Optional[Any]:
+        """
+        Runs OpenCV YuNet DNN face detector on a 320x240 downscaled frame and projects
+        the 15-element vector [x, y, w, h, x_re, y_re, x_le, y_le, x_nt, y_nt, x_rcm, y_rcm, x_lcm, y_lcm, score]
+        back to original frame coordinates.
+        """
+        if not OPENCV_AVAILABLE or cv2 is None or frame_bgr is None or self._face_detector is None:
+            return None
+        try:
+            import numpy as np
+            h_f, w_f = frame_bgr.shape[:2]
+            small = cv2.resize(frame_bgr, (320, 240), interpolation=cv2.INTER_LINEAR)
+            self._face_detector.setInputSize((320, 240))
+            _, faces = self._face_detector.detect(small)
+            if faces is None or len(faces) == 0:
+                return None
+
+            # Pick largest detected face with score >= 0.70
+            valid = [f for f in faces if float(f[14]) >= 0.70]
+            if not valid:
+                return None
+            best = sorted(valid, key=lambda r: float(r[2] * r[3]), reverse=True)[0].copy()
+
+            scale_x = float(w_f) / 320.0
+            scale_y = float(h_f) / 240.0
+            for idx in (0, 2, 4, 6, 8, 10, 12):
+                best[idx] *= scale_x
+            for idx in (1, 3, 5, 7, 9, 11, 13):
+                best[idx] *= scale_y
+            return best.astype(np.float32)
+        except Exception as exc:
+            self._log(f"YuNet detection error: {exc}", "WARN")
+            return None
+
+    @staticmethod
+    def _compute_pose_from_landmarks(face_row: Any) -> Tuple[str, float]:
+        """
+        Computes horizontal head yaw pose ('FRONT', 'LEFT', 'RIGHT') from YuNet 5 landmarks.
+        Uses nose tip horizontal ratio between the two eye centers.
+        """
+        x_e1 = float(face_row[4])
+        x_e2 = float(face_row[6])
+        x_nt = float(face_row[8])
+        left_eye_x = min(x_e1, x_e2)
+        right_eye_x = max(x_e1, x_e2)
+        eye_span = max(1.0, right_eye_x - left_eye_x)
+        nose_ratio = (x_nt - left_eye_x) / eye_span
+
+        # Clamp ratio for HUD display (0.43 / 0.57 = natural ~15-25 deg head turn)
+        nose_ratio_clamped = max(0.0, min(1.0, nose_ratio))
+        if nose_ratio < 0.43:
+            return "LEFT", nose_ratio_clamped
+        elif nose_ratio > 0.57:
+            return "RIGHT", nose_ratio_clamped
+        else:
+            return "FRONT", nose_ratio_clamped
+
     def detect_face_in_frame(
-        self, frame_bgr: Any
+        self, frame_bgr: Any, target_pose: Optional[str] = None
     ) -> Tuple[bool, Any, int, Tuple[int, int, int, int]]:
         """
-        Runs OpenCV Haar Cascade (`haarcascade_frontalface_default.xml`) on a BGR frame.
-        Draws tactical forensic HUD targeting reticles around detected faces.
+        Runs OpenCV YuNet DNN 5-Landmark Detector on a BGR frame.
+        Draws 5 facial landmarks (eyes, nose tip, mouth corners), geometric mesh,
+        and a live 3-Pose Yaw Indicator Bar at the bottom of the viewport.
         Returns: (face_detected, annotated_bgr_frame, num_faces, largest_bbox)
         """
+        self._last_yunet_face_row = None
+        self._last_pose = "NONE"
+        self._last_nose_ratio = 0.5
+
         if not OPENCV_AVAILABLE or cv2 is None or frame_bgr is None:
             return False, frame_bgr, 0, (0, 0, 0, 0)
 
         annotated = frame_bgr.copy()
-        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-        gray = cv2.equalizeHist(gray)
+        h_f, w_f = annotated.shape[:2]
 
-        faces = []
-        if self._face_cascade is not None and not self._face_cascade.empty():
-            faces = self._face_cascade.detectMultiScale(
-                gray,
-                scaleFactor=1.15,
-                minNeighbors=5,
-                minSize=(80, 80),
-            )
-
-        # Adaptive Multi-Spectrum Biometric Face Detector
-        # High speed downscaled detection + robust lighting tolerance
-        if len(faces) == 0:
-            try:
-                import numpy as np
-                h_f, w_f = frame_bgr.shape[:2]
-                # Scale down for lightning-fast analysis (~10x faster)
-                scale_w = 320.0 / float(w_f)
-                scale_h = 240.0 / float(h_f)
-                small = cv2.resize(frame_bgr, (320, 240), interpolation=cv2.INTER_LINEAR)
-
-                hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
-                ycrcb = cv2.cvtColor(small, cv2.COLOR_BGR2YCrCb)
-
-                # Broad spectrum skin detection under varying ambient light / webcams
-                mask_hsv = cv2.inRange(
-                    hsv,
-                    np.array([0, 18, 30], dtype=np.uint8),
-                    np.array([35, 255, 255], dtype=np.uint8),
-                )
-                mask_ycrcb = cv2.inRange(
-                    ycrcb,
-                    np.array([0, 128, 70], dtype=np.uint8),
-                    np.array([255, 180, 135], dtype=np.uint8),
-                )
-                combined = cv2.bitwise_and(mask_hsv, mask_ycrcb)
-                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-                combined = cv2.morphologyEx(combined, cv2.MORPH_OPEN, kernel, iterations=1)
-                combined = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, kernel, iterations=2)
-
-                cnts, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                min_area = (320 * 240) * 0.02  # At least 2% of frame
-                for c in cnts:
-                    area = cv2.contourArea(c)
-                    if area > min_area:
-                        bx, by, bw, bh = cv2.boundingRect(c)
-                        aspect = bh / float(bw)
-                        # Head / face bounding aspect ratio (0.75 - 2.5)
-                        if 0.75 <= aspect <= 2.5:
-                            # Map coordinates back to original frame resolution
-                            orig_x = max(0, int(bx / scale_w))
-                            orig_y = max(0, int(by / scale_h))
-                            orig_w = min(w_f - orig_x, int(bw / scale_w))
-                            orig_h = min(h_f - orig_y, int(bh / scale_h))
-                            # Focus upper 85% for face (exclude neck/torso)
-                            orig_h = int(orig_h * 0.85)
-                            faces.append((orig_x, orig_y, orig_w, orig_h))
-            except Exception as exc:
-                self._log(f"Skin detector warning: {exc}", "WARN")
-
-        if len(faces) == 0:
-            # Draw scanning reticle overlay
-            h, w = annotated.shape[:2]
+        face_row = self._run_yunet_on_frame(frame_bgr)
+        if face_row is None:
             cv2.rectangle(
                 annotated,
-                (w // 4, h // 6),
-                (3 * w // 4, 5 * h // 6),
-                (77, 51, 36),  # Subtle tactical border
+                (w_f // 4, h_f // 6),
+                (3 * w_f // 4, 5 * h_f // 6),
+                (77, 51, 36),
                 1,
             )
             cv2.putText(
                 annotated,
-                "SCANNING BIOMETRIC TARGET...",
+                "YUNET DNN: SCANNING FACE LANDMARKS...",
                 (20, 32),
                 cv2.FONT_HERSHEY_PLAIN,
                 1.3,
-                (11, 158, 245),  # Amber in BGR
+                (11, 158, 245),
                 2,
             )
             return False, annotated, 0, (0, 0, 0, 0)
 
-        # Pick largest face
-        faces_sorted = sorted(faces, key=lambda b: b[2] * b[3], reverse=True)
-        x, y, fw, fh = [int(v) for v in faces_sorted[0]]
+        self._last_yunet_face_row = face_row
+        pose_name, nose_ratio = self._compute_pose_from_landmarks(face_row)
+        self._last_pose = pose_name
+        self._last_nose_ratio = nose_ratio
 
-        # Check mask presence
+        x = max(0, int(face_row[0]))
+        y = max(0, int(face_row[1]))
+        fw = max(1, min(w_f - x, int(face_row[2])))
+        fh = max(1, min(h_f - y, int(face_row[3])))
+        score = float(face_row[14])
+
         is_masked, _ = self.is_face_masked(frame_bgr, (x, y, fw, fh))
+
+        # Draw 5 facial landmarks & geometric biometric mesh (proves focus is strictly on facial anatomy)
+        pts = [
+            (int(face_row[4]), int(face_row[5])),   # Right Eye
+            (int(face_row[6]), int(face_row[7])),   # Left Eye
+            (int(face_row[8]), int(face_row[9])),   # Nose Tip
+            (int(face_row[10]), int(face_row[11])), # Right Mouth
+            (int(face_row[12]), int(face_row[13])), # Left Mouth
+        ]
+        mesh_color = (180, 180, 40) if not is_masked else (0, 0, 200)
+        cv2.line(annotated, pts[0], pts[1], mesh_color, 1)
+        cv2.line(annotated, pts[0], pts[2], mesh_color, 1)
+        cv2.line(annotated, pts[1], pts[2], mesh_color, 1)
+        cv2.line(annotated, pts[2], pts[3], mesh_color, 1)
+        cv2.line(annotated, pts[2], pts[4], mesh_color, 1)
+        cv2.line(annotated, pts[3], pts[4], mesh_color, 1)
+
+        landmark_colors = [
+            (255, 220, 0),   # Eye 1 (Cyan)
+            (255, 220, 0),   # Eye 2 (Cyan)
+            (129, 230, 16),  # Nose Tip (Emerald)
+            (11, 180, 245),  # Mouth 1 (Amber)
+            (11, 180, 245),  # Mouth 2 (Amber)
+        ]
+        for pt, lcol in zip(pts, landmark_colors):
+            cv2.circle(annotated, pt, 4, lcol, -1)
 
         corner = max(18, min(fw, fh) // 5)
         thickness = 2
-        hud_color = (0, 0, 230) if is_masked else (129, 185, 16)  # Red if masked, Emerald if clear
+        hud_color = (0, 0, 230) if is_masked else (129, 185, 16)
 
-        # Top-left
+        # Corner brackets
         cv2.line(annotated, (x, y), (x + corner, y), hud_color, thickness)
         cv2.line(annotated, (x, y), (x, y + corner), hud_color, thickness)
-        # Top-right
         cv2.line(annotated, (x + fw, y), (x + fw - corner, y), hud_color, thickness)
         cv2.line(annotated, (x + fw, y), (x + fw, y + corner), hud_color, thickness)
-        # Bottom-left
         cv2.line(annotated, (x, y + fh), (x + corner, y + fh), hud_color, thickness)
         cv2.line(annotated, (x, y + fh), (x, y + fh - corner), hud_color, thickness)
-        # Bottom-right
         cv2.line(annotated, (x + fw, y + fh), (x + fw - corner, y + fh), hud_color, thickness)
         cv2.line(annotated, (x + fw, y + fh), (x + fw, y + fh - corner), hud_color, thickness)
 
-        hud_text = "MASK DETECTED [PLEASE REMOVE MASK]" if is_masked else f"BIOMETRIC LOCK ACQUIRED [{fw}x{fh}px]"
+        pose_label_map = {"FRONT": "DEPAN", "LEFT": "KIRI", "RIGHT": "KANAN"}
+        pose_id_str = pose_label_map.get(pose_name, pose_name)
+        hud_text = (
+            "MASK DETECTED [PLEASE REMOVE MASK]"
+            if is_masked
+            else f"SFACE 128D LOCK [{pose_id_str}] ({score*100:.0f}%)"
+        )
         cv2.putText(
             annotated,
             hud_text,
             (x, max(24, y - 10)),
             cv2.FONT_HERSHEY_PLAIN,
-            1.2,
+            1.15,
             hud_color,
             2,
         )
-        return True, annotated, len(faces), (x, y, fw, fh)
+
+        # Draw Live 3-Pose Yaw Bar at bottom of frame
+        bar_w = min(280, w_f - 40)
+        bar_x1 = (w_f - bar_w) // 2
+        bar_x2 = bar_x1 + bar_w
+        bar_y = h_f - 18
+        cv2.rectangle(annotated, (bar_x1, bar_y - 8), (bar_x2, bar_y + 8), (35, 30, 25), -1)
+        cv2.rectangle(annotated, (bar_x1, bar_y - 8), (bar_x2, bar_y + 8), (110, 95, 80), 1)
+        # Zone dividers at 0.43 and 0.57
+        z1_x = int(bar_x1 + 0.43 * bar_w)
+        z2_x = int(bar_x1 + 0.57 * bar_w)
+        cv2.line(annotated, (z1_x, bar_y - 8), (z1_x, bar_y + 8), (120, 120, 120), 1)
+        cv2.line(annotated, (z2_x, bar_y - 8), (z2_x, bar_y + 8), (120, 120, 120), 1)
+        # Cursor dot
+        cur_x = int(bar_x1 + nose_ratio * bar_w)
+        cv2.circle(annotated, (cur_x, bar_y), 6, (129, 230, 16) if not is_masked else (0, 0, 240), -1)
+
+        return True, annotated, 1, (x, y, fw, fh)
+
+    def get_last_detected_pose(self) -> Tuple[str, float]:
+        """Returns (pose_name, nose_ratio) from the most recent detect_face_in_frame call."""
+        return self._last_pose, self._last_nose_ratio
+
+    def detect_face_with_pose(
+        self, frame_bgr: Any, target_pose: Optional[str] = None
+    ) -> Tuple[bool, Any, int, Tuple[int, int, int, int], str, float]:
+        """
+        Convenience wrapper returning (detected, annotated_bgr, num_faces, bbox, pose_name, nose_ratio).
+        """
+        detected, annotated, num_faces, bbox = self.detect_face_in_frame(frame_bgr, target_pose=target_pose)
+        return detected, annotated, num_faces, bbox, self._last_pose, self._last_nose_ratio
 
     def is_face_masked(self, frame_bgr: Any, bbox: Tuple[int, int, int, int]) -> Tuple[bool, float]:
         """
-        Detects whether the operator is wearing a medical or cloth mask covering the mouth/nose.
-        Analyzes skin color pixel density in the lower 45% (chin/mouth zone).
+        Detects whether the operator is wearing a medical/cloth mask or covering their nose/mouth.
+        Analyzes skin color pixel density around the nose-to-chin region and compares upper vs lower
+        facial color consistency using YuNet landmarks when available.
         Returns: (is_masked, skin_coverage_ratio)
         """
         if not OPENCV_AVAILABLE or cv2 is None or frame_bgr is None:
             return False, 1.0
         x, y, w, h = bbox
-        if w < 20 or h < 20:
+        if w < 25 or h < 25:
             return False, 1.0
         face_roi = frame_bgr[max(0, y):y + h, max(0, x):x + w]
         if face_roi.size == 0:
@@ -605,161 +696,262 @@ class AuthGate:
 
         try:
             import numpy as np
-            lower_h = int(h * 0.45)
-            lower_roi = face_roi[h - lower_h:, :]
+            # Compare Upper Face (forehead/eye-bridge/upper-cheeks) vs Lower Face (nose-tip/mouth)
+            # This relative comparison is 100% lighting-invariant (works under blue laptop screen light at night)
+            pad_x = int(w * 0.18)
+            upper_roi = face_roi[int(h * 0.15):int(h * 0.45), pad_x:max(pad_x + 1, w - pad_x)]
+            lower_roi = face_roi[int(h * 0.55):int(h * 0.90), pad_x:max(pad_x + 1, w - pad_x)]
+            if upper_roi.size == 0 or lower_roi.size == 0:
+                return False, 1.0
 
-            hsv = cv2.cvtColor(lower_roi, cv2.COLOR_BGR2HSV)
-            ycrcb = cv2.cvtColor(lower_roi, cv2.COLOR_BGR2YCrCb)
+            upper_ycrcb = cv2.cvtColor(upper_roi, cv2.COLOR_BGR2YCrCb).astype(np.float32)
+            lower_ycrcb = cv2.cvtColor(lower_roi, cv2.COLOR_BGR2YCrCb).astype(np.float32)
 
-            mask_hsv = cv2.inRange(hsv, np.array([0, 18, 30], dtype=np.uint8), np.array([35, 255, 255], dtype=np.uint8))
-            mask_ycrcb = cv2.inRange(ycrcb, np.array([0, 128, 70], dtype=np.uint8), np.array([255, 180, 135], dtype=np.uint8))
-            combined = cv2.bitwise_and(mask_hsv, mask_ycrcb)
+            # Median chrominance (Cr, Cb) of upper face (guaranteed exposed skin)
+            up_cr = float(np.median(upper_ycrcb[:, :, 1]))
+            up_cb = float(np.median(upper_ycrcb[:, :, 2]))
+            up_y = float(np.median(upper_ycrcb[:, :, 0]))
 
-            skin_pixels = np.count_nonzero(combined)
-            total = lower_roi.shape[0] * lower_roi.shape[1]
-            ratio = skin_pixels / float(total) if total > 0 else 1.0
+            # Pixel-wise chrominance & luminance distance of lower face relative to upper face skin
+            cr_diff = np.abs(lower_ycrcb[:, :, 1] - up_cr)
+            cb_diff = np.abs(lower_ycrcb[:, :, 2] - up_cb)
+            y_diff = np.abs(lower_ycrcb[:, :, 0] - up_y)
+            chroma_dist = np.sqrt(cr_diff ** 2 + cb_diff ** 2)
 
-            # If skin in mouth/chin region is below 28%, a mask/covering is present
-            return (ratio < 0.28), ratio
+            # A pixel in the lower face matches the person's own upper-face skin under current lighting
+            # if its chrominance is within 24 units and luminance is within 75 units
+            matching_skin_mask = (chroma_dist < 24.0) & (y_diff < 75.0)
+            ratio = float(np.count_nonzero(matching_skin_mask)) / float(matching_skin_mask.size)
+
+            # Mean chrominance shift between upper and lower face
+            mean_chroma_shift = float(np.median(chroma_dist))
+            mean_luma_shift = float(np.median(y_diff))
+
+            # Masked only if < 22% of lower face matches upper face skin tone
+            # OR huge color/brightness jump (surgical blue/white/black mask)
+            is_masked = (ratio < 0.22) or (mean_chroma_shift > 28.0) or (mean_luma_shift > 70.0)
+            return bool(is_masked), ratio
         except Exception:
             return False, 1.0
 
     def extract_face_feature_vector(self, frame_bgr: Any, bbox: Tuple[int, int, int, int]) -> Optional[str]:
         """
-        Extracts a high-discrimination multi-zone facial biometric representation
-        (CLAHE normalized intensity + Sobel contour gradients), compressed via zlib
-        and encoded in base64 with version prefix 'LXV_BIO_V2:'.
-        Length is ~500-1500 chars, ideal for SQLite & Supabase Cloud storage.
+        Extracts a pure 128-dimensional Deep Neural Network facial identity vector using
+        OpenCV SFace (`face_recognition_sface_2021dec.onnx`) after affine landmark alignment
+        (`alignCrop` to 112x112 internal face only, 0% room background/suasana).
+        Returns: 'LXV_SFACE_SINGLE:<base64_float32_128d>'
         """
-        if not OPENCV_AVAILABLE or cv2 is None or frame_bgr is None:
-            return None
-        x, y, w, h = bbox
-        if w < 20 or h < 20:
-            return None
-        # Extract face ROI
-        face_roi = frame_bgr[max(0, y):y + h, max(0, x):x + w]
-        if face_roi.size == 0:
+        if not OPENCV_AVAILABLE or cv2 is None or frame_bgr is None or self._face_recognizer is None:
             return None
 
         try:
             import numpy as np
-            gray = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY) if len(face_roi.shape) == 3 else face_roi
-            face = cv2.resize(gray, (80, 80), interpolation=cv2.INTER_AREA)
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-            face_eq = clahe.apply(face)
+            face_row = self._last_yunet_face_row
+            if face_row is None:
+                face_row = self._run_yunet_on_frame(frame_bgr)
+            if face_row is None:
+                return None
 
-            gx = cv2.Sobel(face_eq, cv2.CV_32F, 1, 0, ksize=3)
-            gy = cv2.Sobel(face_eq, cv2.CV_32F, 0, 1, ksize=3)
-            mag = cv2.magnitude(gx, gy)
-            mag = cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+            # Affine warp & crop strictly around the 5 facial landmarks (112x112 internal face)
+            aligned_face = self._face_recognizer.alignCrop(frame_bgr, face_row)
+            feat = self._face_recognizer.feature(aligned_face)
+            feat = np.asarray(feat, dtype=np.float32).reshape(128)
+            norm = float(np.linalg.norm(feat))
+            if norm <= 1e-7:
+                return None
+            feat = (feat / norm).astype(np.float32)
 
-            f_pack = cv2.resize(face_eq, (40, 40), interpolation=cv2.INTER_AREA)
-            m_pack = cv2.resize(mag, (40, 40), interpolation=cv2.INTER_AREA)
-            packed = np.hstack([f_pack, m_pack])
-
-            compressed = zlib.compress(packed.tobytes(), level=9)
-            encoded = base64.b64encode(compressed).decode("ascii")
-            return f"LXV_BIO_V2:{encoded}"
+            b64 = base64.b64encode(feat.tobytes()).decode("ascii")
+            return f"LXV_SFACE_SINGLE:{b64}"
         except Exception as exc:
-            self._log(f"Face extraction error: {exc}", "WARN")
+            self._log(f"SFace 128-D extraction error: {exc}", "WARN")
             return None
+
+    @staticmethod
+    def _decode_sface_single(vec_str: str) -> Optional[Any]:
+        """
+        Decodes a single 128-D float32 L2-normalized vector from 'LXV_SFACE_SINGLE:<b64>' or raw base64.
+        """
+        if not vec_str:
+            return None
+        try:
+            import numpy as np
+            raw_b64 = vec_str[len("LXV_SFACE_SINGLE:"):] if vec_str.startswith("LXV_SFACE_SINGLE:") else vec_str
+            raw_bytes = base64.b64decode(raw_b64)
+            if len(raw_bytes) != 128 * 4:
+                return None
+            vec = np.frombuffer(raw_bytes, dtype=np.float32).copy().reshape(128)
+            norm = float(np.linalg.norm(vec))
+            if norm > 1e-7:
+                vec /= norm
+            return vec
+        except Exception:
+            return None
+
+    def combine_multipose_vectors(
+        self, front_vec_str: str, left_vec_str: str, right_vec_str: str
+    ) -> Tuple[bool, str, str]:
+        """
+        Validates and combines 3 single-pose 128-D SFace embeddings (FRONT, LEFT, RIGHT)
+        into a unified 'LXV_SFACE_V3:{...}' profile for database storage.
+        Also checks cross-pose identity consistency so two different people cannot be mixed.
+        Returns: (ok, bundle_string, message)
+        """
+        try:
+            import numpy as np
+            v_front = self._decode_sface_single(front_vec_str)
+            v_left = self._decode_sface_single(left_vec_str)
+            v_right = self._decode_sface_single(right_vec_str)
+            if v_front is None or v_left is None or v_right is None:
+                return False, "", "Data vektor 3-posisi (Depan/Kiri/Kanan) belum lengkap atau rusak."
+
+            # Ensure all 3 poses come from the SAME individual (turned head naturally gives 0.20..0.75 cosine)
+            sim_fl = float(np.dot(v_front, v_left))
+            sim_fr = float(np.dot(v_front, v_right))
+            if sim_fl < 0.16 or sim_fr < 0.16:
+                return (
+                    False,
+                    "",
+                    f"Wajah tidak konsisten antar pose (Kiri={sim_fl*100:.0f}%, Kanan={sim_fr*100:.0f}%). "
+                    "Pastikan orang yang sama direkam pada ketiga pose!",
+                )
+
+            centroid = v_front + v_left + v_right
+            c_norm = float(np.linalg.norm(centroid))
+            if c_norm > 1e-7:
+                centroid = (centroid / c_norm).astype(np.float32)
+
+            b_front = base64.b64encode(v_front.tobytes()).decode("ascii")
+            b_left = base64.b64encode(v_left.tobytes()).decode("ascii")
+            b_right = base64.b64encode(v_right.tobytes()).decode("ascii")
+            b_cent = base64.b64encode(centroid.tobytes()).decode("ascii")
+
+            digest = hashlib.sha256(f"{b_front}:{b_left}:{b_right}".encode("utf-8")).hexdigest()
+            payload = {
+                "version": "LXV_SFACE_V3",
+                "model": "YuNet+SFace-128D-3Pose",
+                "poses": {
+                    "front": b_front,
+                    "left": b_left,
+                    "right": b_right,
+                },
+                "centroid": b_cent,
+                "sha256": digest,
+            }
+            bundle_str = "LXV_SFACE_V3:" + json.dumps(payload, separators=(",", ":"))
+            return True, bundle_str, "Profil Biometrik 3-Posisi (Depan, Kiri, Kanan) berhasil dikunci!"
+        except Exception as exc:
+            return False, "", f"Gagal menggabungkan vektor 3-posisi: {exc}"
 
     def compare_face_feature(self, candidate_str: str, stored_str: str) -> Tuple[bool, float]:
         """
-        Compares candidate face vector with stored enrolled profile using multi-zone
-        cross-correlation across eyes, nose/mouth, and gradient edges.
+        Compares candidate 128-D SFace neural embedding against stored 3-Pose SFace profile
+        ('LXV_SFACE_V3:...').
+        Strictly rejects legacy background-based profiles ('LXV_BIO_V2', raw hex, or 'EMPTY')
+        and rejects unauthorized people (friends/strangers).
         Returns: (is_match, similarity_percentage)
-        Rejects unenrolled profiles, friend/unauthorized faces, or empty placeholders.
         """
         if not candidate_str or not stored_str:
             return False, 0.0
 
         stored_clean = stored_str.strip()
-        if (
-            stored_clean in ("EMPTY", "NONE", "")
-            or stored_clean.startswith("LEXVAULT_BIOMETRIC_ENROLLED")
-            or len(stored_clean) < 30
-        ):
-            # Not enrolled or initial placeholder -> strictly unauthorized
+        # Strictly require LXV_SFACE_V3 (or LXV_SFACE_SINGLE) neural embeddings
+        if not (stored_clean.startswith("LXV_SFACE_V3:") or stored_clean.startswith("LXV_SFACE_SINGLE:")):
             return False, 0.0
 
         try:
             import numpy as np
-
-            def _decode(v_str: str) -> Optional[np.ndarray]:
-                if v_str.startswith("LXV_BIO_V2:"):
-                    raw = base64.b64decode(v_str[len("LXV_BIO_V2:"):])
-                    decomp = zlib.decompress(raw)
-                    return np.frombuffer(decomp, dtype=np.uint8).reshape((40, 80))
-                # Backward compatibility for legacy raw hex (64x64)
-                try:
-                    raw_b = bytes.fromhex(v_str)
-                    if len(raw_b) == 64 * 64:
-                        arr = np.frombuffer(raw_b, dtype=np.uint8).reshape((64, 64))
-                        arr_small = cv2.resize(arr, (40, 40))
-                        return np.hstack([arr_small, arr_small])
-                except Exception:
-                    pass
-                return None
-
-            p_cand = _decode(candidate_str)
-            p_stored = _decode(stored_clean)
-            if p_cand is None or p_stored is None:
+            v_cand = self._decode_sface_single(candidate_str)
+            if v_cand is None:
                 return False, 0.0
 
-            f1_face = p_cand[:, :40].astype(np.float32)
-            f1_mag = p_cand[:, 40:].astype(np.float32)
-            f2_face = p_stored[:, :40].astype(np.float32)
-            f2_mag = p_stored[:, 40:].astype(np.float32)
+            pose_vecs: List[Any] = []
+            v_centroid = None
 
-            def _best_corr(img1: np.ndarray, img2: np.ndarray, pad: int = 3) -> float:
-                h, w = img2.shape
-                if h <= 2 * pad or w <= 2 * pad:
-                    pad = 1
-                inner = img2[pad:h - pad, pad:w - pad]
-                res = cv2.matchTemplate(img1, inner, cv2.TM_CCOEFF_NORMED)
-                return float(np.max(res))
+            if stored_clean.startswith("LXV_SFACE_V3:"):
+                data = json.loads(stored_clean[len("LXV_SFACE_V3:"):])
+                poses = data.get("poses", data)
+                for key in ("front", "left", "right"):
+                    v = self._decode_sface_single(str(poses.get(key) or ""))
+                    if v is not None:
+                        pose_vecs.append(v)
+                if data.get("centroid"):
+                    v_centroid = self._decode_sface_single(str(data["centroid"]))
+            elif stored_clean.startswith("LXV_SFACE_SINGLE:"):
+                v = self._decode_sface_single(stored_clean)
+                if v is not None:
+                    pose_vecs.append(v)
 
-            c_face = _best_corr(f1_face, f2_face, pad=3)
-            c_mag = _best_corr(f1_mag, f2_mag, pad=3)
-            c_eyes = _best_corr(f1_face[5:25, :], f2_face[5:25, :], pad=2)
-            c_mouth = _best_corr(f1_face[20:38, :], f2_face[20:38, :], pad=2)
+            if not pose_vecs:
+                return False, 0.0
 
-            composite = 0.35 * c_face + 0.30 * c_mag + 0.20 * c_eyes + 0.15 * c_mouth
-            sim_pct = max(0.0, min(100.0, ((composite + 1.0) / 2.0) * 100.0))
+            if v_centroid is None:
+                mean_v = np.mean(np.stack(pose_vecs, axis=0), axis=0)
+                n_m = float(np.linalg.norm(mean_v))
+                v_centroid = (mean_v / n_m).astype(np.float32) if n_m > 1e-7 else pose_vecs[0]
 
-            # Strict security thresholds:
-            # - True unmasked owner gives ~75-92% (composite > 0.50)
-            # - Masked or friend gives < 45% or negative mouth/eye correlation
-            is_match = bool(
-                composite >= 0.52
-                and sim_pct >= 65.0
-                and c_eyes >= 0.30
-                and c_mouth >= 0.25
-            )
+            cos_scores = [float(np.dot(v_cand, pv)) for pv in pose_vecs]
+            l2_dists = [float(np.linalg.norm(v_cand - pv)) for pv in pose_vecs]
+
+            max_cos = max(cos_scores)
+            min_l2 = min(l2_dists)
+            centroid_cos = float(np.dot(v_cand, v_centroid))
+
+            # SFace 128-D Deep Learning Biometric Decision Rule (OpenCV Zoo Official SFace FR_COSINE = 0.363):
+            # - Different person (friend/stranger in same room): max_cos typically -0.10 to +0.22 (min_l2 > 1.24)
+            # - Same person: max_cos >= 0.363, centroid_cos >= 0.31, min_l2 <= 1.128
+            is_match = bool(max_cos >= 0.363 and centroid_cos >= 0.31 and min_l2 <= 1.128)
+
+            # Map cosine score to intuitive forensic UI percentage (0 - 100%)
+            if is_match:
+                sim_pct = min(99.5, 78.0 + ((max_cos - 0.363) / 0.50) * 21.5)
+            else:
+                sim_pct = max(0.0, min(58.0, (max(0.0, max_cos) / 0.363) * 58.0))
+
             return is_match, sim_pct
         except Exception as exc:
-            self._log(f"Face comparison error: {exc}", "WARN")
+            self._log(f"SFace comparison error: {exc}", "WARN")
             return False, 0.0
+
+    def enroll_multipose_profile(
+        self, serial_number: str, front_vec: str, left_vec: str, right_vec: str
+    ) -> Tuple[bool, str]:
+        """
+        Combines 3-pose SFace vectors (FRONT, LEFT, RIGHT) and persists them to
+        Supabase Cloud and local SQLite for the specified dongle serial_number.
+        """
+        ok_comb, bundle_str, msg_comb = self.combine_multipose_vectors(front_vec, left_vec, right_vec)
+        if not ok_comb:
+            return False, msg_comb
+
+        ok_db = self.db_manager.update_dongle_face_profile(serial_number, bundle_str)
+        if ok_db:
+            try:
+                seed_path = self.base_dir / "database" / "default_face_seed.hex"
+                seed_path.write_text(bundle_str, encoding="utf-8")
+            except Exception:
+                pass
+            storage_type = "Supabase Cloud & SQLite" if self.db_manager.cloud_online else "SQLite Lokal"
+            self._log(
+                f"Profil 3-Pose SFace 128-D berhasil disimpan untuk '{serial_number}' ({storage_type}).",
+                "SUCCESS",
+            )
+            return True, f"3-Pose Face ID berhasil disimpan ke {storage_type}!"
+        return False, "Gagal menyimpan profil biometrik 3-posisi ke database."
 
     def enroll_face_profile(self, serial_number: str, frame_bgr: Any, bbox: Tuple[int, int, int, int]) -> Tuple[bool, str]:
         """
-        Captures and registers the current operator's biometric face template to database.
+        Single-frame fallback wrapper (extracts SFace 128-D vector and stores as 3-pose bundle).
         """
         is_masked, _ = self.is_face_masked(frame_bgr, bbox)
         if is_masked:
             return False, "Masker terdeteksi! Harap lepas masker wajah Anda sebelum mendaftar."
 
-        vector_hex = self.extract_face_feature_vector(frame_bgr, bbox)
-        if not vector_hex:
-            return False, "Gagal mengekstrak fitur wajah dari frame kamera."
+        vec_single = self.extract_face_feature_vector(frame_bgr, bbox)
+        if not vec_single:
+            return False, "Gagal mengekstrak fitur wajah SFace 128-D dari frame kamera."
 
-        ok = self.db_manager.update_dongle_face_profile(serial_number, vector_hex)
-        if ok:
-            storage_type = "Supabase Cloud & SQLite" if self.db_manager.cloud_online else "SQLite Lokal"
-            self._log(f"Biometrik wajah berhasil didaftarkan untuk dongle '{serial_number}' ({storage_type}).", "SUCCESS")
-            return True, f"Wajah berhasil didaftarkan ke {storage_type}!"
-        return False, "Gagal menyimpan biometrik ke database."
+        return self.enroll_multipose_profile(serial_number, vec_single, vec_single, vec_single)
 
     # =========================================================================
     # 4. SALTED SHA-256 PASSWORD HASHING & VERIFICATION

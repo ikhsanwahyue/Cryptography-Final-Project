@@ -20,10 +20,10 @@ from database.db_manager import DatabaseManager
 from core.auth_gate import AuthGate
 
 def enroll_from_webcam(serial_number: str = "LXV-USB-484BC196"):
-    print("=" * 65)
-    print("  LEXVAULT - BIOMETRIC FACE ENROLLMENT TOOL (SUPABASE + SQLITE)")
+    print("=" * 68)
+    print("  LEXVAULT - 3-POSE NEURAL FACE ID ENROLLMENT (YUNET + SFACE 128-D)")
     print(f"  Target Dongle / Operator: {serial_number}")
-    print("=" * 65)
+    print("=" * 68)
     print("\n[1/3] Menyalakan webcam...")
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
@@ -33,62 +33,81 @@ def enroll_from_webcam(serial_number: str = "LXV-USB-484BC196"):
     db = DatabaseManager()
     gate = AuthGate(db_manager=db)
 
-    print("[2/3] Kamera aktif! Hadapkan wajah ke kamera (tanpa masker).")
-    print("      Tekan tombol [SPASI] di jendela kamera untuk AMBIL FOTO & DAFTAR.")
-    print("      Tekan tombol [ESC] atau [Q] untuk batal.\n")
+    print("[2/3] Kamera aktif! Ikuti 3 tahap pemindaian (tanpa masker):")
+    print("      Tahap 1: Hadap DEPAN (FRONT)")
+    print("      Tahap 2: Menoleh ke KIRI (LEFT)")
+    print("      Tahap 3: Menoleh ke KANAN (RIGHT)")
+    print("      (Otomatis merekam saat sudut pas, atau tekan [SPASI]). Tekan [ESC]/[Q] untuk batal.\n")
 
+    poses = {"FRONT": None, "LEFT": None, "RIGHT": None}
+    pose_hold = 0
     enrolled = False
+
     while True:
-        ret, frame = cap.read()
-        if not ret or frame is None:
+        ret, raw_frame = cap.read()
+        if not ret or raw_frame is None:
             continue
 
-        detected, annotated, _, bbox = gate.detect_face_in_frame(frame)
+        frame = cv2.flip(raw_frame, 1)
+        detected, annotated, _, bbox, pose_label, _ = gate.detect_face_with_pose(frame)
         is_masked, _ = gate.is_face_masked(frame, bbox) if detected else (False, 1.0)
 
-        # Tampilkan petunjuk di layar preview
+        target_pose = "FRONT" if not poses["FRONT"] else ("LEFT" if not poses["LEFT"] else "RIGHT")
+        target_id = {"FRONT": "1/3 HADAP DEPAN", "LEFT": "2/3 TOLEH KE KIRI", "RIGHT": "3/3 TOLEH KE KANAN"}[target_pose]
+
         h, w = annotated.shape[:2]
         if is_masked:
             status_text = "MASKER TERDETEKSI! Lepas masker untuk mendaftar"
-            color = (0, 0, 255) # Red
+            color = (0, 0, 255)
+            pose_hold = 0
         elif detected:
-            status_text = "WAJAH TERKUNCI! Tekan [SPASI] untuk Mendaftar"
-            color = (0, 255, 0) # Green
+            if pose_label == target_pose:
+                pose_hold += 1
+                status_text = f"[{target_id}] SUDUT PAS ({pose_hold}/3)! Tahan sebentar..."
+                color = (0, 255, 0)
+            else:
+                pose_hold = 0
+                status_text = f"Target: [{target_id}] (Saat ini: {pose_label})"
+                color = (0, 200, 255)
         else:
-            status_text = "Mencari wajah... Hadapkan wajah ke kamera"
-            color = (0, 165, 255) # Amber
+            pose_hold = 0
+            status_text = f"Target: [{target_id}] - Posisikan wajah di tengah"
+            color = (0, 165, 255)
 
-        cv2.putText(annotated, status_text, (20, h - 25), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2)
-        cv2.imshow(f"LexVault - Pendaftaran Wajah ({serial_number})", annotated)
+        cv2.putText(annotated, status_text, (18, h - 22), cv2.FONT_HERSHEY_SIMPLEX, 0.58, color, 2)
+        cv2.imshow(f"LexVault 3-Pose Face ID ({serial_number})", annotated)
 
-        key = cv2.waitKey(20) & 0xFF
+        key = cv2.waitKey(25) & 0xFF
         if key in (27, ord('q'), ord('Q')):
             print("[INFO] Pendaftaran dibatalkan oleh pengguna.")
             break
-        elif key == 32:  # SPASI
-            if not detected or bbox[2] < 30:
-                print("[WARN] Wajah belum terdeteksi jelas! Posisikan wajah di tengah kamera.")
-                continue
-            if is_masked:
-                print("[WARN] MASKER TERDETEKSI! Harap lepas masker wajah Anda sebelum mengambil foto.")
-                continue
 
-            print("[3/3] Memproses dan menyimpan biometrik ke database...")
-            ok, msg = gate.enroll_face_profile(serial_number, frame, bbox)
-            if ok:
-                print(f"\n[SUKSES] {msg}")
-                cloud_status = "YA (Tersimpan Online)" if db.cloud_online else "OFFLINE (SQLite Lokal)"
-                print(f"[STATUS CLOUD] Supabase Cloud Sync: {cloud_status}")
-                # Update seeder file juga
-                vector_hex = gate.extract_face_feature_vector(frame, bbox)
-                if vector_hex:
-                    seed_path = Path("database/default_face_seed.hex")
-                    seed_path.write_text(vector_hex)
-                    print(f"[INFO] Template seeder 'database/default_face_seed.hex' berhasil diperbarui!")
-                enrolled = True
-            else:
-                print(f"\n[GAGAL] {msg}")
-            break
+        should_capture = (pose_hold >= 3) or (key == 32 and detected and not is_masked)
+        if should_capture:
+            vec = gate.extract_face_feature_vector(frame, bbox)
+            if vec:
+                poses[target_pose] = vec
+                pose_hold = 0
+                print(f"  [OK] Pose {target_pose} berhasil direkam!")
+                if all(poses.values()):
+                    print("\n[3/3] Menggabungkan 3-Pose SFace 128-D & menyimpan ke Supabase Cloud + SQLite...")
+                    ok, msg = gate.enroll_multipose_profile(
+                        serial_number,
+                        poses["FRONT"],
+                        poses["LEFT"],
+                        poses["RIGHT"],
+                    )
+                    if ok:
+                        print(f"\n[SUKSES] {msg}")
+                        cloud_status = "YA (Tersimpan Online)" if db.cloud_online else "OFFLINE (SQLite Lokal)"
+                        print(f"[STATUS CLOUD] Supabase Cloud Sync: {cloud_status}")
+                        enrolled = True
+                        break
+                    else:
+                        print(f"\n[GAGAL] {msg}")
+                        print("        Mengulang pengambilan 3 pose secara otomatis...\n")
+                        poses = {"FRONT": None, "LEFT": None, "RIGHT": None}
+                        pose_hold = 0
 
     cap.release()
     cv2.destroyAllWindows()

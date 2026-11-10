@@ -276,15 +276,19 @@ class AuthWizardFrame(ctk.CTkFrame):
         entry_pwd = ctk.CTkEntry(scroll, placeholder_text="Masukkan password kuat...", show="•", font=get_mono_font(11))
         entry_pwd.pack(fill="x", pady=(2, 10))
 
-        # 5. Biometric Face Capture
-        ctk.CTkLabel(scroll, text="5. Rekam Biometrik Wajah Operator (Wajib):", font=get_mono_font(11, "bold")).pack(anchor="w")
-        
+        # 5. Biometric 3-Pose Face Capture (DEPAN, KIRI, KANAN)
+        ctk.CTkLabel(
+            scroll,
+            text="5. Rekam 3-Pose Biometrik Wajah (Depan, Kiri, Kanan - Wajib):",
+            font=get_mono_font(11, "bold"),
+        ).pack(anchor="w")
+
         cam_box = ctk.CTkFrame(scroll, fg_color=COLOR_SURFACE_DARK, border_color=COLOR_BORDER, border_width=1, corner_radius=6)
         cam_box.pack(fill="x", pady=(4, 8))
 
         cam_preview = ctk.CTkLabel(
             cam_box,
-            text="[ KAMERA STANDBY ]\nKlik 'NYALAKAN KAMERA' untuk merekam wajah operator",
+            text="[ KAMERA 3-POSE STANDBY ]\nKlik 'NYALAKAN KAMERA' lalu ikuti instruksi: DEPAN ➔ KIRI ➔ KANAN",
             font=get_mono_font(11, "bold"),
             text_color=COLOR_TEXT_MUTED,
             height=180,
@@ -297,12 +301,14 @@ class AuthWizardFrame(ctk.CTkFrame):
             "after_id": None,
             "last_frame": None,
             "captured_vector": None,
+            "poses": {"FRONT": None, "LEFT": None, "RIGHT": None},
+            "hold_count": 0,
             "ctk_img": None,
         }
 
         lbl_face_status = ctk.CTkLabel(
             scroll,
-            text="⚠️ STATUS BIOMETRIK: BELUM DIAMBIL (WAJIB)",
+            text="⚠️ TAHAP [0/3]: BELUM DIREKAM (DEPAN: ✗ | KIRI: ✗ | KANAN: ✗)",
             font=get_mono_font(11, "bold"),
             text_color=COLOR_AMBER,
         )
@@ -329,6 +335,35 @@ class AuthWizardFrame(ctk.CTkFrame):
                 pass
             bio_state["ctk_img"] = None
 
+        def _get_next_needed_pose() -> Optional[str]:
+            for p_key in ("FRONT", "LEFT", "RIGHT"):
+                if bio_state["poses"][p_key] is None:
+                    return p_key
+            return None
+
+        def _finalize_3pose_capture():
+            ok_c, bundle_str, msg_c = self.auth_gate.combine_multipose_vectors(
+                bio_state["poses"]["FRONT"],
+                bio_state["poses"]["LEFT"],
+                bio_state["poses"]["RIGHT"],
+            )
+            if not ok_c:
+                bio_state["poses"] = {"FRONT": None, "LEFT": None, "RIGHT": None}
+                bio_state["hold_count"] = 0
+                lbl_face_status.configure(text=f"⚠️ {msg_c}", text_color=COLOR_CRIMSON)
+                return
+
+            bio_state["captured_vector"] = bundle_str
+            lbl_face_status.configure(
+                text="✓ 3-POSE FACE ID TERKUNCI [DEPAN: ✓ | KIRI: ✓ | KANAN: ✓]",
+                text_color=COLOR_EMERALD,
+            )
+            _stop_dialog_cam()
+            cam_preview.configure(
+                text="[ 3-POSE NEURAL FACE ID BERHASIL DIREKAM & TERKUNCI ]\n(DEPAN ✓ | KIRI ✓ | KANAN ✓)",
+                text_color=COLOR_EMERALD,
+            )
+
         def _poll_dialog_cam():
             if not bio_state["running"] or bio_state["cap"] is None:
                 return
@@ -337,8 +372,47 @@ class AuthWizardFrame(ctk.CTkFrame):
                 _stop_dialog_cam()
                 return
 
+            # Mirror frame horizontally so Turning Left moves left intuitively like a smartphone mirror
+            frame = cv2.flip(frame, 1)
             bio_state["last_frame"] = frame.copy()
-            detected, ann, _, _ = self.auth_gate.detect_face_in_frame(frame)
+
+            needed_pose = _get_next_needed_pose()
+            detected, ann, _, bbox = self.auth_gate.detect_face_in_frame(frame, target_pose=needed_pose)
+            cur_pose, _ = self.auth_gate.get_last_detected_pose()
+            is_masked, _ = self.auth_gate.is_face_masked(frame, bbox) if detected else (False, 1.0)
+
+            pose_names_id = {"FRONT": "LURUS KE DEPAN", "LEFT": "SEDIKIT KE KIRI", "RIGHT": "SEDIKIT KE KANAN"}
+            f_mark = "✓" if bio_state["poses"]["FRONT"] else "✗"
+            l_mark = "✓" if bio_state["poses"]["LEFT"] else "✗"
+            r_mark = "✓" if bio_state["poses"]["RIGHT"] else "✗"
+
+            if is_masked:
+                bio_state["hold_count"] = 0
+                lbl_face_status.configure(
+                    text="⚠️ MASKER TERDETEKSI! Harap lepas masker wajah Anda.",
+                    text_color=COLOR_CRIMSON,
+                )
+            elif needed_pose and detected and cur_pose == needed_pose:
+                bio_state["hold_count"] += 1
+                lbl_face_status.configure(
+                    text=f"◉ MENGUNCI POSE {pose_names_id[needed_pose]} ({bio_state['hold_count']}/3)... [D:{f_mark} K:{l_mark} KN:{r_mark}]",
+                    text_color=COLOR_EMERALD,
+                )
+                if bio_state["hold_count"] >= 3:
+                    vec = self.auth_gate.extract_face_feature_vector(frame, bbox)
+                    if vec:
+                        bio_state["poses"][needed_pose] = vec
+                        bio_state["hold_count"] = 0
+                        if _get_next_needed_pose() is None:
+                            _finalize_3pose_capture()
+                            return
+            elif needed_pose:
+                bio_state["hold_count"] = max(0, bio_state["hold_count"] - 1)
+                lbl_face_status.configure(
+                    text=f"➔ ARAHKAN WAJAH {pose_names_id[needed_pose]} [D:{f_mark} | K:{l_mark} | KN:{r_mark}]",
+                    text_color=COLOR_PRIMARY,
+                )
+
             rgb = cv2.cvtColor(ann, cv2.COLOR_BGR2RGB)
             pil_img = Image.fromarray(rgb)
             ctk_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(320, 180))
@@ -353,13 +427,16 @@ class AuthWizardFrame(ctk.CTkFrame):
             if bio_state["running"]:
                 return
             try:
+                bio_state["poses"] = {"FRONT": None, "LEFT": None, "RIGHT": None}
+                bio_state["captured_vector"] = None
+                bio_state["hold_count"] = 0
                 bio_state["cap"] = cv2.VideoCapture(0)
                 if not bio_state["cap"] or not bio_state["cap"].isOpened():
                     _stop_dialog_cam()
                     lbl_face_status.configure(text="Kamera tidak dapat diakses! Berikan izin kamera.", text_color=COLOR_CRIMSON)
                     return
                 bio_state["running"] = True
-                lbl_face_status.configure(text="◉ KAMERA AKTIF: Posisikan wajah di tengah...", text_color=COLOR_PRIMARY)
+                lbl_face_status.configure(text="◉ TAHAP 1/3: Hadapkan wajah LURUS KE DEPAN...", text_color=COLOR_PRIMARY)
                 _poll_dialog_cam()
             except Exception as exc:
                 lbl_face_status.configure(text=f"Error kamera: {exc}", text_color=COLOR_CRIMSON)
@@ -368,30 +445,31 @@ class AuthWizardFrame(ctk.CTkFrame):
             if not bio_state["running"] or bio_state["last_frame"] is None:
                 lbl_face_status.configure(text="Nyalakan kamera terlebih dahulu!", text_color=COLOR_CRIMSON)
                 return
+            needed_pose = _get_next_needed_pose()
+            if not needed_pose:
+                _finalize_3pose_capture()
+                return
             detected, _, _, bbox = self.auth_gate.detect_face_in_frame(bio_state["last_frame"])
             if not detected or bbox[2] < 30 or bbox[3] < 30:
                 lbl_face_status.configure(text="Wajah belum terdeteksi jelas! Dekatkan wajah.", text_color=COLOR_CRIMSON)
                 return
-
-            vec = self.auth_gate.extract_face_feature_vector(bio_state["last_frame"], bbox)
-            if not vec:
-                lbl_face_status.configure(text="Gagal mengekstrak vektor biometrik wajah!", text_color=COLOR_CRIMSON)
+            is_masked, _ = self.auth_gate.is_face_masked(bio_state["last_frame"], bbox)
+            if is_masked:
+                lbl_face_status.configure(text="Lepas masker terlebih dahulu!", text_color=COLOR_CRIMSON)
                 return
-
-            bio_state["captured_vector"] = vec
-            lbl_face_status.configure(
-                text=f"✓ WAJAH OPERATOR TERKUNCI & TERDAFTAR [{bbox[2]}x{bbox[3]}px]",
-                text_color=COLOR_EMERALD,
-            )
-            _stop_dialog_cam()
-            cam_preview.configure(text="[ FOTO WAJAH BERHASIL DIAMBIL & TERKUNCI ]", text_color=COLOR_EMERALD)
+            vec = self.auth_gate.extract_face_feature_vector(bio_state["last_frame"], bbox)
+            if vec:
+                bio_state["poses"][needed_pose] = vec
+                bio_state["hold_count"] = 0
+                if _get_next_needed_pose() is None:
+                    _finalize_3pose_capture()
 
         cam_btn_row = ctk.CTkFrame(scroll, fg_color="transparent")
         cam_btn_row.pack(fill="x", pady=(0, 10))
         ctk.CTkButton(
             cam_btn_row,
-            text="◉ NYALAKAN KAMERA",
-            width=140,
+            text="◉ MULAI SCAN 3-POSE",
+            width=155,
             fg_color=COLOR_PRIMARY,
             hover_color=COLOR_PRIMARY_HOVER,
             command=_start_dialog_cam,
@@ -399,7 +477,7 @@ class AuthWizardFrame(ctk.CTkFrame):
         ).pack(side="left", padx=(0, 8))
         ctk.CTkButton(
             cam_btn_row,
-            text="📸 AMBIL FOTO WAJAH",
+            text="📸 KUNCI POSE SAAT INI",
             fg_color=COLOR_EMERALD,
             hover_color="#059669",
             text_color="#052E16",
@@ -664,6 +742,7 @@ class AuthWizardFrame(ctk.CTkFrame):
             self.lbl_bio_status.set_status("CAMERA STREAM INTERRUPTED", "WARN")
             return
 
+        frame = cv2.flip(frame, 1)
         detected, annotated_bgr, _, bbox = self.auth_gate.detect_face_in_frame(frame)
         self._last_raw_frame = frame.copy()
         self._last_bbox = bbox
@@ -674,7 +753,7 @@ class AuthWizardFrame(ctk.CTkFrame):
         self._cam_ctk_image = ctk_img
         self.camera_label.configure(image=ctk_img, text="")
 
-        # Check face match against enrolled profile
+        # Check face match against enrolled 3-Pose SFace 128-D profile
         is_matched = False
         similarity_pct = 0.0
         face_status_msg = "SEARCHING FACE..."
@@ -690,9 +769,9 @@ class AuthWizardFrame(ctk.CTkFrame):
                 rec = self.auth_gate.db_manager.get_dongle(self.verified_dongle.serial_number) or {}
                 stored_hash = str(rec.get("face_profile_hash") or "").strip()
 
-                if not stored_hash or stored_hash in ("EMPTY", "NONE", "") or len(stored_hash) < 30:
+                if not stored_hash or not stored_hash.startswith("LXV_SFACE_V3:"):
                     is_matched = False
-                    face_status_msg = "PROFIL WAJAH BELUM TERDAFTAR PADA TOKEN!"
+                    face_status_msg = "WAJIB DAFTAR WAJAH 3-POSE (SFACE V3) DULU!"
                     face_status_mode = "DANGER"
                 else:
                     cand_vec = self.auth_gate.extract_face_feature_vector(frame, bbox)
@@ -798,11 +877,24 @@ class AuthWizardFrame(ctk.CTkFrame):
         self.pwd_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
         self.pwd_entry.bind("<Return>", lambda _e: self._verify_stage3_password())
 
+        self.btn_bypass_pwd = ctk.CTkButton(
+            entry_row,
+            text="⚡ BYPASS PASSWORD",
+            height=40,
+            width=175,
+            font=get_mono_font(12, "bold"),
+            fg_color=COLOR_AMBER,
+            hover_color="#D97706",
+            text_color="#052E16",
+            command=self._bypass_stage3_password,
+        )
+        self.btn_bypass_pwd.pack(side="right", padx=(6, 0))
+
         self.btn_unlock_vault = ctk.CTkButton(
             entry_row,
             text="🔓 VERIFY HASH & UNLOCK VAULT",
             height=40,
-            width=250,
+            width=235,
             font=get_mono_font(12, "bold"),
             fg_color=COLOR_EMERALD,
             hover_color="#059669",
@@ -838,6 +930,57 @@ class AuthWizardFrame(ctk.CTkFrame):
             hover_color=COLOR_BORDER,
             command=lambda: self.show_step(2),
         ).pack(side="left")
+
+        ctk.CTkButton(
+            bottom_nav,
+            text="🔄 RESET SANDI KE DEFAULT (LexVault#2026)",
+            height=32,
+            font=get_mono_font(11, "bold"),
+            fg_color=COLOR_PRIMARY,
+            hover_color="#0284C7",
+            text_color="#042F2E",
+            command=self._reset_stage3_default_password,
+        ).pack(side="right")
+
+    def _bypass_stage3_password(self) -> None:
+        """Emergency / Dev Override to bypass Stage 3 password check and immediately unlock the vault."""
+        live_dongle = self.auth_gate.scan_hardware_dongle()
+        if not live_dongle.connected or not live_dongle.authorized:
+            if self.verified_dongle is not None:
+                live_dongle = self.verified_dongle
+            else:
+                self.lbl_pwd_status.set_status("USB DONGLE MISSING! RETURN TO STAGE 1", "DANGER")
+                self.show_step(1)
+                return
+
+        self.auth_gate.session_unlocked = True
+        self.auth_gate.active_dongle = live_dongle
+        self.lbl_pwd_status.set_status("PASSWORD BYPASSED (OVERRIDE ACTIVE) - UNLOCKING VAULT", "SUCCESS")
+        self.badge_step3.set_status("STAGE 3: BYPASS OVERRIDE", "SUCCESS")
+        self.log(f"Stage 3 Password Bypass diaktifkan untuk dongle '{live_dongle.serial_number}'.", "WARN")
+        self.on_authenticated(live_dongle)
+
+    def _reset_stage3_default_password(self) -> None:
+        """Resets the current dongle's password back to 'LexVault#2026' in Supabase & SQLite."""
+        target_serial = (
+            self.verified_dongle.serial_number
+            if self.verified_dongle
+            else self.auth_gate.scan_hardware_dongle().serial_number
+        )
+        if not target_serial or target_serial in ("NONE", "CORRUPTED-TOKEN"):
+            self.lbl_pwd_status.set_status("TIDAK ADA DONGLE AKTIF UNTUK DIRESET", "DANGER")
+            return
+
+        default_pwd = "LexVault#2026"
+        ok, msg = self.auth_gate.change_operator_password(target_serial, default_pwd)
+        if ok:
+            self.pwd_entry.delete(0, "end")
+            self.pwd_entry.insert(0, default_pwd)
+            self._populate_stage3_telemetry()
+            self.lbl_pwd_status.set_status("SANDI DIRESET KE: LexVault#2026 (SIAP VERIFY)", "SUCCESS")
+            self.log(f"Sandi untuk {target_serial} berhasil direset ke default 'LexVault#2026'.", "SUCCESS")
+        else:
+            self.lbl_pwd_status.set_status(f"GAGAL RESET: {msg}", "DANGER")
 
     def _populate_stage3_telemetry(self) -> None:
         if not self.verified_dongle:
