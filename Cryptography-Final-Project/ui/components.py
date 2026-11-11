@@ -124,7 +124,7 @@ class StatusBadge(ctk.CTkLabel):
             fg = "#1E3A8A"
             tc = "#93C5FD"
 
-        self.configure(text=f" ● {text} ", fg_color=fg, text_color=tc)
+        self.configure(text=f" {text} ", fg_color=fg, text_color=tc)
 
 
 class ForensicLogViewer(ctk.CTkFrame):
@@ -147,7 +147,7 @@ class ForensicLogViewer(ctk.CTkFrame):
 
         ctk.CTkLabel(
             top_bar,
-            text="▸ REAL-TIME FORENSIC TELEMETRY & AUDIT LOG (ISO/IEC 27037)",
+            text="REAL-TIME FORENSIC TELEMETRY & AUDIT LOG (ISO/IEC 27037)",
             font=get_mono_font(11, "bold"),
             text_color=COLOR_TEXT_MUTED,
         ).pack(side="left")

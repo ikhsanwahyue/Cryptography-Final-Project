@@ -5,6 +5,7 @@ Multi-Factor Authentication Screens for LexVault (`ui/frames_auth.py`):
 - Screen 3: Salted SHA-256 Password Hash Authentication
 """
 
+from pathlib import Path
 from tkinter import filedialog
 from typing import Any, Callable, Optional
 
@@ -160,7 +161,7 @@ class AuthWizardFrame(ctk.CTkFrame):
 
         self.btn_scan_usb = ctk.CTkButton(
             right_col,
-            text="↻ SCAN PHYSICAL USB DONGLE",
+            text="SCAN PHYSICAL USB DONGLE",
             font=get_mono_font(12, "bold"),
             height=38,
             fg_color=COLOR_PRIMARY,
@@ -169,42 +170,43 @@ class AuthWizardFrame(ctk.CTkFrame):
         )
         self.btn_scan_usb.pack(fill="x", padx=14, pady=(0, 10))
 
-        # Dev Dongle Switch for testing when no physical USB drive is inserted
-        self.dev_dongle_var = ctk.BooleanVar(value=self.auth_gate.dev_dongle_enabled)
-        self.switch_dev_dongle = ctk.CTkSwitch(
-            right_col,
-            text="Mount Virtual Dev Dongle\n(dongle_sample/classified.key)",
-            font=get_mono_font(11, "bold"),
-            variable=self.dev_dongle_var,
-            progress_color=COLOR_EMERALD,
-            command=self._on_toggle_dev_dongle,
-        )
-        self.switch_dev_dongle.pack(anchor="w", padx=14, pady=(4, 12))
+        # # Dev Dongle Switch for testing when no physical USB drive is inserted (Default: OFF / Non-Aktif)
+        # self.auth_gate.dev_dongle_enabled = False
+        # self.dev_dongle_var = ctk.BooleanVar(value=False)
+        # self.switch_dev_dongle = ctk.CTkSwitch(
+        #     right_col,
+        #     text="Mount Virtual Dev Dongle\n(dongle_sample/classified.key)",
+        #     font=get_mono_font(11, "bold"),
+        #     variable=self.dev_dongle_var,
+        #     progress_color=COLOR_EMERALD,
+        #     command=self._on_toggle_dev_dongle,
+        # )
+        # self.switch_dev_dongle.pack(anchor="w", padx=14, pady=(4, 12))
 
-        ctk.CTkLabel(
-            right_col,
-            text="PROVISION EXTERNAL USB DRIVE:\nWrites classified.key & registers serial",
-            font=get_mono_font(10, "normal"),
-            text_color=COLOR_TEXT_MUTED,
-            justify="left",
-        ).pack(anchor="w", padx=14, pady=(6, 4))
+        # ctk.CTkLabel(
+        #     right_col,
+        #     text="PROVISION EXTERNAL USB DRIVE:\nWrites classified.key & registers serial",
+        #     font=get_mono_font(10, "normal"),
+        #     text_color=COLOR_TEXT_MUTED,
+        #     justify="left",
+        # ).pack(anchor="w", padx=14, pady=(6, 4))
 
-        self.btn_provision_usb = ctk.CTkButton(
-            right_col,
-            text="⚡ PROVISION USB DRIVE FOLDER...",
-            font=get_mono_font(11, "bold"),
-            height=32,
-            fg_color=COLOR_SURFACE,
-            border_color=COLOR_BORDER,
-            border_width=1,
-            hover_color=COLOR_BORDER,
-            command=self._provision_usb_dialog,
-        )
-        self.btn_provision_usb.pack(fill="x", padx=14, pady=(0, 14))
+        # self.btn_provision_usb = ctk.CTkButton(
+        #     right_col,
+        #     text="PROVISION USB DRIVE FOLDER...",
+        #     font=get_mono_font(11, "bold"),
+        #     height=32,
+        #     fg_color=COLOR_SURFACE,
+        #     border_color=COLOR_BORDER,
+        #     border_width=1,
+        #     hover_color=COLOR_BORDER,
+        #     command=self._provision_usb_dialog,
+        # )
+        # self.btn_provision_usb.pack(fill="x", padx=14, pady=(0, 14))
 
         self.btn_next_step2 = ctk.CTkButton(
             right_col,
-            text="PROCEED TO STAGE 2 (BIOMETRICS) ➔",
+            text="PROCEED TO STAGE 2 (BIOMETRICS)",
             font=get_mono_font(12, "bold"),
             height=42,
             fg_color=COLOR_EMERALD,
@@ -246,20 +248,40 @@ class AuthWizardFrame(ctk.CTkFrame):
         scroll = ctk.CTkScrollableFrame(dialog, fg_color="transparent")
         scroll.pack(fill="both", expand=True, padx=14, pady=(0, 10))
 
-        # 1. Target Mount Path
+        # 1. Target Mount Path (auto-filled with physical USB mount or dongle_sample)
         ctk.CTkLabel(scroll, text="1. USB Flash Drive Mount Directory:", font=get_mono_font(11, "bold")).pack(anchor="w")
         path_row = ctk.CTkFrame(scroll, fg_color="transparent")
         path_row.pack(fill="x", pady=(2, 8))
         entry_path = ctk.CTkEntry(path_row, placeholder_text="Pilih folder root USB...", font=get_mono_font(11))
         entry_path.pack(side="left", fill="x", expand=True, padx=(0, 8))
 
+        detected_mounts = self.auth_gate.get_removable_mounts()
+        default_mount_str = (
+            str(detected_mounts[0])
+            if detected_mounts
+            else str(self.auth_gate.sample_token_path.parent)
+        )
+        entry_path.insert(0, default_mount_str)
+
         def _browse():
-            d = filedialog.askdirectory(title="Pilih Root Flash Drive USB", parent=dialog)
+            try:
+                dialog.grab_release()
+            except Exception:
+                pass
+            d = filedialog.askdirectory(
+                title="Pilih Root Flash Drive USB (atau folder dongle_sample)",
+                initialdir="/Volumes" if Path("/Volumes").exists() else default_mount_str,
+                parent=dialog,
+            )
+            try:
+                dialog.grab_set()
+            except Exception:
+                pass
             if d:
                 entry_path.delete(0, "end")
                 entry_path.insert(0, d)
 
-        ctk.CTkButton(path_row, text="📁 BROWSE", width=80, command=_browse, font=get_mono_font(11, "bold")).pack(side="right")
+        ctk.CTkButton(path_row, text="BROWSE", width=80, command=_browse, font=get_mono_font(11, "bold")).pack(side="right")
 
         # 2. Operator Name
         ctk.CTkLabel(scroll, text="2. Nama Operator / Penyidik:", font=get_mono_font(11, "bold")).pack(anchor="w")
@@ -273,7 +295,7 @@ class AuthWizardFrame(ctk.CTkFrame):
 
         # 4. Password
         ctk.CTkLabel(scroll, text="4. Sandi Rahasia Custodian:", font=get_mono_font(11, "bold")).pack(anchor="w")
-        entry_pwd = ctk.CTkEntry(scroll, placeholder_text="Masukkan password kuat...", show="•", font=get_mono_font(11))
+        entry_pwd = ctk.CTkEntry(scroll, placeholder_text="Masukkan password kuat...", show="*", font=get_mono_font(11))
         entry_pwd.pack(fill="x", pady=(2, 10))
 
         # 5. Biometric 3-Pose Face Capture (DEPAN, KIRI, KANAN)
@@ -288,7 +310,7 @@ class AuthWizardFrame(ctk.CTkFrame):
 
         cam_preview = ctk.CTkLabel(
             cam_box,
-            text="[ KAMERA 3-POSE STANDBY ]\nKlik 'NYALAKAN KAMERA' lalu ikuti instruksi: DEPAN ➔ KIRI ➔ KANAN",
+            text="[ KAMERA 3-POSE STANDBY ]\nKlik 'NYALAKAN KAMERA' lalu ikuti instruksi: DEPAN -> KIRI -> KANAN",
             font=get_mono_font(11, "bold"),
             text_color=COLOR_TEXT_MUTED,
             height=180,
@@ -308,7 +330,7 @@ class AuthWizardFrame(ctk.CTkFrame):
 
         lbl_face_status = ctk.CTkLabel(
             scroll,
-            text="⚠️ TAHAP [0/3]: BELUM DIREKAM (DEPAN: ✗ | KIRI: ✗ | KANAN: ✗)",
+            text="TAHAP [0/3]: BELUM DIREKAM (DEPAN: - | KIRI: - | KANAN: -)",
             font=get_mono_font(11, "bold"),
             text_color=COLOR_AMBER,
         )
@@ -350,17 +372,17 @@ class AuthWizardFrame(ctk.CTkFrame):
             if not ok_c:
                 bio_state["poses"] = {"FRONT": None, "LEFT": None, "RIGHT": None}
                 bio_state["hold_count"] = 0
-                lbl_face_status.configure(text=f"⚠️ {msg_c}", text_color=COLOR_CRIMSON)
+                lbl_face_status.configure(text=f"GAGAL: {msg_c}", text_color=COLOR_CRIMSON)
                 return
 
             bio_state["captured_vector"] = bundle_str
             lbl_face_status.configure(
-                text="✓ 3-POSE FACE ID TERKUNCI [DEPAN: ✓ | KIRI: ✓ | KANAN: ✓]",
+                text="3-POSE FACE ID TERKUNCI [DEPAN: OK | KIRI: OK | KANAN: OK]",
                 text_color=COLOR_EMERALD,
             )
             _stop_dialog_cam()
             cam_preview.configure(
-                text="[ 3-POSE NEURAL FACE ID BERHASIL DIREKAM & TERKUNCI ]\n(DEPAN ✓ | KIRI ✓ | KANAN ✓)",
+                text="[ 3-POSE NEURAL FACE ID BERHASIL DIREKAM & TERKUNCI ]\n(DEPAN: OK | KIRI: OK | KANAN: OK)",
                 text_color=COLOR_EMERALD,
             )
 
@@ -382,20 +404,20 @@ class AuthWizardFrame(ctk.CTkFrame):
             is_masked, _ = self.auth_gate.is_face_masked(frame, bbox) if detected else (False, 1.0)
 
             pose_names_id = {"FRONT": "LURUS KE DEPAN", "LEFT": "SEDIKIT KE KIRI", "RIGHT": "SEDIKIT KE KANAN"}
-            f_mark = "✓" if bio_state["poses"]["FRONT"] else "✗"
-            l_mark = "✓" if bio_state["poses"]["LEFT"] else "✗"
-            r_mark = "✓" if bio_state["poses"]["RIGHT"] else "✗"
+            f_mark = "OK" if bio_state["poses"]["FRONT"] else "-"
+            l_mark = "OK" if bio_state["poses"]["LEFT"] else "-"
+            r_mark = "OK" if bio_state["poses"]["RIGHT"] else "-"
 
             if is_masked:
                 bio_state["hold_count"] = 0
                 lbl_face_status.configure(
-                    text="⚠️ MASKER TERDETEKSI! Harap lepas masker wajah Anda.",
+                    text="MASKER TERDETEKSI! Harap lepas masker wajah Anda.",
                     text_color=COLOR_CRIMSON,
                 )
             elif needed_pose and detected and cur_pose == needed_pose:
                 bio_state["hold_count"] += 1
                 lbl_face_status.configure(
-                    text=f"◉ MENGUNCI POSE {pose_names_id[needed_pose]} ({bio_state['hold_count']}/3)... [D:{f_mark} K:{l_mark} KN:{r_mark}]",
+                    text=f"MENGUNCI POSE {pose_names_id[needed_pose]} ({bio_state['hold_count']}/3)... [D:{f_mark} K:{l_mark} KN:{r_mark}]",
                     text_color=COLOR_EMERALD,
                 )
                 if bio_state["hold_count"] >= 3:
@@ -409,7 +431,7 @@ class AuthWizardFrame(ctk.CTkFrame):
             elif needed_pose:
                 bio_state["hold_count"] = max(0, bio_state["hold_count"] - 1)
                 lbl_face_status.configure(
-                    text=f"➔ ARAHKAN WAJAH {pose_names_id[needed_pose]} [D:{f_mark} | K:{l_mark} | KN:{r_mark}]",
+                    text=f"ARAHKAN WAJAH {pose_names_id[needed_pose]} [D:{f_mark} | K:{l_mark} | KN:{r_mark}]",
                     text_color=COLOR_PRIMARY,
                 )
 
@@ -436,7 +458,7 @@ class AuthWizardFrame(ctk.CTkFrame):
                     lbl_face_status.configure(text="Kamera tidak dapat diakses! Berikan izin kamera.", text_color=COLOR_CRIMSON)
                     return
                 bio_state["running"] = True
-                lbl_face_status.configure(text="◉ TAHAP 1/3: Hadapkan wajah LURUS KE DEPAN...", text_color=COLOR_PRIMARY)
+                lbl_face_status.configure(text="TAHAP 1/3: Hadapkan wajah LURUS KE DEPAN...", text_color=COLOR_PRIMARY)
                 _poll_dialog_cam()
             except Exception as exc:
                 lbl_face_status.configure(text=f"Error kamera: {exc}", text_color=COLOR_CRIMSON)
@@ -468,7 +490,7 @@ class AuthWizardFrame(ctk.CTkFrame):
         cam_btn_row.pack(fill="x", pady=(0, 10))
         ctk.CTkButton(
             cam_btn_row,
-            text="◉ MULAI SCAN 3-POSE",
+            text="MULAI SCAN 3-POSE",
             width=155,
             fg_color=COLOR_PRIMARY,
             hover_color=COLOR_PRIMARY_HOVER,
@@ -477,7 +499,7 @@ class AuthWizardFrame(ctk.CTkFrame):
         ).pack(side="left", padx=(0, 8))
         ctk.CTkButton(
             cam_btn_row,
-            text="📸 KUNCI POSE SAAT INI",
+            text="KUNCI POSE SAAT INI",
             fg_color=COLOR_EMERALD,
             hover_color="#059669",
             text_color="#052E16",
@@ -490,13 +512,32 @@ class AuthWizardFrame(ctk.CTkFrame):
 
         def _execute_provision():
             mount = entry_path.get().strip()
+            if not mount:
+                mount = default_mount_str
             name = entry_name.get().strip()
             badge = entry_badge.get().strip()
             pwd = entry_pwd.get().strip()
             face_vec = bio_state.get("captured_vector")
 
+            # Auto-fallback: if user clicked Save while camera is active or after partial pose capture
+            if not face_vec:
+                existing_poses = [v for v in bio_state["poses"].values() if v]
+                if not existing_poses and bio_state.get("last_frame") is not None:
+                    det_f, _, _, bbox_f = self.auth_gate.detect_face_in_frame(bio_state["last_frame"])
+                    if det_f:
+                        v_now = self.auth_gate.extract_face_feature_vector(bio_state["last_frame"], bbox_f)
+                        if v_now:
+                            existing_poses = [v_now]
+                if existing_poses:
+                    p_front = bio_state["poses"].get("FRONT") or existing_poses[0]
+                    p_left = bio_state["poses"].get("LEFT") or existing_poses[-1]
+                    p_right = bio_state["poses"].get("RIGHT") or existing_poses[0]
+                    ok_c, bundle_str, _ = self.auth_gate.combine_multipose_vectors(p_front, p_left, p_right)
+                    if ok_c:
+                        face_vec = bundle_str
+
             if not mount or not Path(mount).exists():
-                lbl_status.configure(text="Pilih direktori mount USB yang valid!", text_color=COLOR_CRIMSON)
+                lbl_status.configure(text=f"Direktori USB tidak ditemukan: {mount}", text_color=COLOR_CRIMSON)
                 return
             if not name or not badge or not pwd:
                 lbl_status.configure(text="Semua kolom nama, badge, dan sandi wajib diisi!", text_color=COLOR_CRIMSON)
@@ -505,7 +546,7 @@ class AuthWizardFrame(ctk.CTkFrame):
                 lbl_status.configure(text="Sandi minimal 6 karakter demi keamanan!", text_color=COLOR_CRIMSON)
                 return
             if not face_vec:
-                lbl_status.configure(text="Wajah operator wajib direkam sebelum mendaftarkan USB!", text_color=COLOR_CRIMSON)
+                lbl_status.configure(text="Klik 'MULAI SCAN 3-POSE' dan hadapkan wajah ke kamera dulu!", text_color=COLOR_CRIMSON)
                 return
 
             _stop_dialog_cam()
@@ -542,7 +583,7 @@ class AuthWizardFrame(ctk.CTkFrame):
         ).pack(side="left")
         ctk.CTkButton(
             btn_row,
-            text="💾 BUAT DONGLE & DAFTARKAN",
+            text="BUAT DONGLE & DAFTARKAN",
             fg_color=COLOR_EMERALD,
             hover_color="#059669",
             text_color="#052E16",
@@ -568,16 +609,16 @@ class AuthWizardFrame(ctk.CTkFrame):
         ]
         if bus_devices:
             for d in bus_devices:
-                lines.append(f"  • {d.get('name')} | SN: {d.get('serial')}")
+                lines.append(f"  - {d.get('name')} | SN: {d.get('serial')}")
         else:
-            lines.append("  • [No Physical USB Storage Serials on Bus]")
+            lines.append("  - [No Physical USB Storage Serials on Bus]")
 
         lines.append(f"REMOVABLE MOUNTS ({len(mounts)}):")
         if mounts:
             for m in mounts:
-                lines.append(f"  • {m}")
+                lines.append(f"  - {m}")
         else:
-            lines.append("  • [No External Volumes Mounted]")
+            lines.append("  - [No External Volumes Mounted]")
 
         lines.append("-" * 58)
         lines.append(f"DIAGNOSTIC     : {status.message}")
@@ -662,7 +703,7 @@ class AuthWizardFrame(ctk.CTkFrame):
 
         self.btn_start_cam = ctk.CTkButton(
             ctrl_frame,
-            text="◉ START WEBCAM HAAR SCAN",
+            text="START WEBCAM HAAR SCAN",
             font=get_mono_font(12, "bold"),
             height=36,
             fg_color=COLOR_PRIMARY,
@@ -676,7 +717,7 @@ class AuthWizardFrame(ctk.CTkFrame):
 
         ctk.CTkButton(
             nav_row,
-            text="⬅ STAGE 1",
+            text="STAGE 1",
             width=95,
             height=38,
             font=get_mono_font(11, "bold"),
@@ -687,7 +728,7 @@ class AuthWizardFrame(ctk.CTkFrame):
 
         self.btn_next_step3 = ctk.CTkButton(
             nav_row,
-            text="STAGE 3 (PASSWORD) ➔",
+            text="STAGE 3 (PASSWORD)",
             height=38,
             font=get_mono_font(11, "bold"),
             fg_color=COLOR_EMERALD,
@@ -763,7 +804,7 @@ class AuthWizardFrame(ctk.CTkFrame):
             is_masked, _ = self.auth_gate.is_face_masked(frame, bbox)
             if is_masked:
                 is_matched = False
-                face_status_msg = "⚠️ MASKER TERDETEKSI! HARAP LEPAS MASKER"
+                face_status_msg = "MASKER TERDETEKSI! HARAP LEPAS MASKER"
                 face_status_mode = "DANGER"
             else:
                 rec = self.auth_gate.db_manager.get_dongle(self.verified_dongle.serial_number) or {}
@@ -868,7 +909,7 @@ class AuthWizardFrame(ctk.CTkFrame):
         self.pwd_entry = ctk.CTkEntry(
             entry_row,
             placeholder_text="Masukkan Sandi Custodian...",
-            show="•",
+            show="*",
             height=40,
             font=get_mono_font(13, "bold"),
             fg_color=COLOR_BASE,
@@ -877,22 +918,22 @@ class AuthWizardFrame(ctk.CTkFrame):
         self.pwd_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
         self.pwd_entry.bind("<Return>", lambda _e: self._verify_stage3_password())
 
-        self.btn_bypass_pwd = ctk.CTkButton(
-            entry_row,
-            text="⚡ BYPASS PASSWORD",
-            height=40,
-            width=175,
-            font=get_mono_font(12, "bold"),
-            fg_color=COLOR_AMBER,
-            hover_color="#D97706",
-            text_color="#052E16",
-            command=self._bypass_stage3_password,
-        )
-        self.btn_bypass_pwd.pack(side="right", padx=(6, 0))
+        # self.btn_bypass_pwd = ctk.CTkButton(
+        #     entry_row,
+        #     text="BYPASS PASSWORD",
+        #     height=40,
+        #     width=175,
+        #     font=get_mono_font(12, "bold"),
+        #     fg_color=COLOR_AMBER,
+        #     hover_color="#D97706",
+        #     text_color="#052E16",
+        #     command=self._bypass_stage3_password,
+        # )
+        # self.btn_bypass_pwd.pack(side="right", padx=(6, 0))
 
         self.btn_unlock_vault = ctk.CTkButton(
             entry_row,
-            text="🔓 VERIFY HASH & UNLOCK VAULT",
+            text="VERIFY HASH & UNLOCK VAULT",
             height=40,
             width=235,
             font=get_mono_font(12, "bold"),
@@ -923,7 +964,7 @@ class AuthWizardFrame(ctk.CTkFrame):
 
         ctk.CTkButton(
             bottom_nav,
-            text="⬅ BACK TO STAGE 2 (BIOMETRICS)",
+            text="BACK TO STAGE 2 (BIOMETRICS)",
             height=32,
             font=get_mono_font(11, "bold"),
             fg_color=COLOR_SURFACE,
@@ -933,7 +974,7 @@ class AuthWizardFrame(ctk.CTkFrame):
 
         ctk.CTkButton(
             bottom_nav,
-            text="🔄 RESET SANDI KE DEFAULT (LexVault#2026)",
+            text="RESET SANDI KE DEFAULT (LexVault#2026)",
             height=32,
             font=get_mono_font(11, "bold"),
             fg_color=COLOR_PRIMARY,
@@ -1075,8 +1116,10 @@ class AuthWizardFrame(ctk.CTkFrame):
         self.hash_inspector.delete("1.0", "end")
         self.hash_inspector.configure(state="disabled")
 
-        # Reset USB & Badges
-        self.dev_dongle_var.set(self.auth_gate.dev_dongle_enabled)
+        # Reset USB & Badges (Default Dev Dongle back to OFF on lockdown)
+        self.auth_gate.dev_dongle_enabled = False
+        if hasattr(self, "dev_dongle_var"):
+            self.dev_dongle_var.set(False)
         self.badge_step1.set_status("STAGE 1: USB LOCKED", "DANGER")
         self.badge_step2.set_status("STAGE 2: BIOMETRIC RESET", "WARN")
         self.badge_step3.set_status("STAGE 3: SESSION LOCKED", "DANGER")

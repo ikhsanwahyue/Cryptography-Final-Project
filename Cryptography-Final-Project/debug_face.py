@@ -33,11 +33,12 @@ def run_face_debugger():
 
     db = DatabaseManager()
     gate = AuthGate(db_manager=db)
+    active_dongle = gate.scan_hardware_dongle()
 
-    # 1. Inspect & auto-sync default dongles in SQLite
+    # 1. Inspect & auto-sync default dongles in active Dongle SQLite (USB Flashdisk or dongle_sample)
     dongles = db.list_dongles()
-    print(f"\n[1] STATUS DATABASE (Cloud Online: {db.cloud_online}):")
-    seed_path = PROJECT_ROOT / "database" / "default_face_seed.hex"
+    print(f"\n[1] STATUS DATABASE DONGLE (Lokasi: {db.sqlite_path} | Cloud Online: {db.cloud_online}):")
+    seed_path = PROJECT_ROOT / "dongle_sample" / "default_face_seed.hex"
     seed_str = seed_path.read_text(encoding="utf-8").strip() if seed_path.exists() else ""
 
     valid_v3_profile = seed_str if seed_str.startswith("LXV_SFACE_V3:") else ""
@@ -56,7 +57,7 @@ def run_face_debugger():
             print(f"  -> [AUTO-SYNC] Menyalin profil LXV_SFACE_V3 ke dongle '{sn}'")
 
         status_str = f"VALID LXV_SFACE_V3 ({len(fh)} bytes)" if fh.startswith("LXV_SFACE_V3:") else f"BELUM TERDAFTAR / LAMA ('{fh[:25]}')"
-        print(f"  • Serial: {sn:<24} | Operator: {op:<35} | Face: {status_str}")
+        print(f"  - Serial: {sn:<24} | Operator: {op:<35} | Face: {status_str}")
 
     active_dongle = gate.scan_hardware_dongle()
     target_serial = (
@@ -66,9 +67,9 @@ def run_face_debugger():
     )
     print(f"\n[2] TARGET DONGLE AKTIF: {target_serial}")
     print("    Kontrol Jendela Kamera (Pastikan klik jendela kamera sebelum tekan tombol):")
-    print("    • Tekan [E]     : Rekam Ulang 3-Pose (DEPAN -> KIRI -> KANAN)")
-    print("    • Tekan [SPASI] : Quick-Enroll 1-Klik (Simpan Wajah Saat Ini)")
-    print("    • Tekan [Q/ESC] : Keluar dari Debugger")
+    print("    - Tekan [E]     : Rekam Ulang 3-Pose (DEPAN -> KIRI -> KANAN)")
+    print("    - Tekan [SPASI] : Quick-Enroll 1-Klik (Simpan Wajah Saat Ini)")
+    print("    - Tekan [Q/ESC] : Keluar dari Debugger")
     print("    (Atau jalankan: .venv/bin/python debug_face.py --enroll untuk langsung rekam otomatis)\n")
 
     cap = cv2.VideoCapture(0)

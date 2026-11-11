@@ -169,7 +169,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         keys_card = HUDCard(
             container,
             title="HYBRID SUPER-ENCRYPTION KEYS",
-            subtitle="Stage 1: Vigenere Full-ASCII (mod 256) ➔ Stage 2: AES-256-CBC (PKCS#7, 16-Byte Random IV)",
+            subtitle="Stage 1: Vigenere Full-ASCII (mod 256) -> Stage 2: AES-256-CBC (PKCS#7, 16-Byte Random IV)",
         )
         keys_card.pack(fill="x", pady=(0, 8))
 
@@ -238,7 +238,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         btn_encrypt = ctk.CTkButton(
             left_pane,
-            text="🔒 SUPER-ENCRYPT & SEAL TO CUSTODY ➔",
+            text="SUPER-ENCRYPT & SEAL TO CUSTODY",
             height=38,
             font=get_mono_font(12, "bold"),
             fg_color=COLOR_PRIMARY,
@@ -275,7 +275,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         btn_decrypt = ctk.CTkButton(
             right_pane,
-            text="⬅ DECRYPT BASE64 TO PLAINTEXT",
+            text="DECRYPT BASE64 TO PLAINTEXT",
             height=38,
             font=get_mono_font(12, "bold"),
             fg_color=COLOR_EMERALD,
@@ -336,7 +336,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         card = HUDCard(
             container,
             title="BINARY EVIDENCE FILE LOCKER (ChaCha20 STREAM CIPHER - NON-AES)",
-            subtitle="Header Format: [12-Byte Random Nonce] + [Raw ChaCha20 Ciphertext Stream] ➔ .locked",
+            subtitle="Header Format: [12-Byte Random Nonce] + [Raw ChaCha20 Ciphertext Stream] -> .locked",
         )
         card.pack(fill="both", expand=True)
 
@@ -429,9 +429,9 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         self.txt_file_telemetry.insert(
             "1.0",
             "[ChaCha20 BINARY LOCKER READY]\n"
-            "• Algoritma      : ChaCha20 Stream Cipher (256-bit Key via SHA-256, 96-bit / 12-Byte Random Nonce)\n"
-            "• Struktur File  : [12-BYTE NONCE HEADER] + [RAW CIPHERTEXT BYTES]\n"
-            "• Kepatuhan      : Pemulihan bit-identical 100% tanpa korupsi untuk dokumen, arsip, audio, dan video.",
+            "- Algoritma      : ChaCha20 Stream Cipher (256-bit Key via SHA-256, 96-bit / 12-Byte Random Nonce)\n"
+            "- Struktur File  : [12-BYTE NONCE HEADER] + [RAW CIPHERTEXT BYTES]\n"
+            "- Kepatuhan      : Pemulihan bit-identical 100% tanpa korupsi untuk dokumen, arsip, audio, dan video.",
         )
 
     def _browse_locker_file(self) -> None:
@@ -574,7 +574,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         ctk.CTkButton(
             btn_row,
-            text="🧬 EMBED LSB INTO PNG & SEAL",
+            text="EMBED LSB INTO PNG & SEAL",
             height=40,
             font=get_mono_font(11, "bold"),
             fg_color=COLOR_PRIMARY,
@@ -584,7 +584,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         ctk.CTkButton(
             btn_row,
-            text="🔍 EXTRACT LSB FROM PNG",
+            text="EXTRACT LSB FROM PNG",
             height=40,
             font=get_mono_font(11, "bold"),
             fg_color=COLOR_EMERALD,
@@ -692,7 +692,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         ctk.CTkButton(
             ctrl_row,
-            text="↻ REFRESH CHAIN LEDGER",
+            text="REFRESH CHAIN LEDGER",
             height=34,
             font=get_mono_font(11, "bold"),
             fg_color=COLOR_EMERALD,
@@ -703,7 +703,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         ctk.CTkButton(
             ctrl_row,
-            text="↗ OPEN POLYGONSCAN AMOY",
+            text="OPEN POLYGONSCAN AMOY",
             height=34,
             font=get_mono_font(11, "bold"),
             fg_color=COLOR_PRIMARY,
@@ -750,14 +750,14 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
             "================================================================================",
         ]
         for m in messages:
-            lines.append(f"• {m}")
+            lines.append(f"- {m}")
 
         lines.append("\n--- LAYER 1: LOCAL PROOF-OF-WORK BLOCKCHAIN (DIFFICULTY TARGET: '000') ---")
         for blk in self.blockchain.chain:
             status_tag = (
-                "❌ [TAMPERED / INVALID HASH]"
+                "[TAMPERED / INVALID HASH]"
                 if blk.index in compromised
-                else "✔ [VERIFIED PoW '000']"
+                else "[VERIFIED PoW '000']"
             )
             explorer_link = (
                 Web3SyncWorker.format_explorer_url(blk.layer2_tx_hash)
@@ -784,7 +784,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         else:
             for r in evidence_rows:
                 lines.append(
-                    f"  • ID: {r.get('evidence_id')} | Type: {r.get('evidence_type')} | "
+                    f"  - ID: {r.get('evidence_id')} | Type: {r.get('evidence_type')} | "
                     f"IV/Nonce: {r.get('iv_nonce')} | DataHash: {str(r.get('data_hash'))[:20]}... | "
                     f"L2: {r.get('layer2_tx_hash')}"
                 )
@@ -871,7 +871,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         ctk.CTkButton(
             right_col,
-            text="◉ NYALAKAN KAMERA (SCAN 3-POSE)",
+            text="NYALAKAN KAMERA (SCAN 3-POSE)",
             font=get_mono_font(12, "bold"),
             height=36,
             fg_color=COLOR_PRIMARY,
@@ -881,7 +881,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         ctk.CTkButton(
             right_col,
-            text="📸 KUNCI POSE / PERBARUI WAJAH",
+            text="KUNCI POSE / PERBARUI WAJAH",
             font=get_mono_font(12, "bold"),
             height=38,
             fg_color=COLOR_EMERALD,
@@ -892,7 +892,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         ctk.CTkButton(
             right_col,
-            text="🔑 UBAH SANDI CUSTODIAN",
+            text="UBAH SANDI CUSTODIAN",
             font=get_mono_font(11, "bold"),
             height=34,
             fg_color="#1E3A8A",
@@ -902,7 +902,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         ctk.CTkButton(
             right_col,
-            text="➕ TAMBAH USER / DONGLE BARU",
+            text="TAMBAH USER / DONGLE BARU",
             font=get_mono_font(11, "bold"),
             height=34,
             fg_color="#064E3B",
@@ -912,7 +912,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         ctk.CTkButton(
             right_col,
-            text="⏹ STOP KAMERA",
+            text="STOP KAMERA",
             font=get_mono_font(11, "bold"),
             height=32,
             fg_color=COLOR_SURFACE,
@@ -930,7 +930,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
             f"BADGE ID       : {rec.get('badge_id', 'N/A')}\n"
             f"SERIAL TOKEN   : {serial}\n"
             f"STATUS WAJAH   : {'3-POSE SFACE 128D AKTIF' if has_v3_face else 'PERLU ENROLL 3-POSE BARU'}\n"
-            f"DATABASE SYNC  : {'SUPABASE + SQLITE' if self.db_manager.cloud_online else 'OFFLINE SQLITE'}"
+            # f"DATABASE SYNC  : {'SUPABASE + SQLITE' if self.db_manager.cloud_online else 'OFFLINE SQLITE'}"
         )
         self.txt_tab5_profile.configure(state="normal")
         self.txt_tab5_profile.delete("1.0", "end")
@@ -964,7 +964,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
             self._refresh_tab5_operator_info()
             self._tab5_stop_cam()
             self.tab5_cam_label.configure(
-                text=f"[ 3-POSE FACE ID BERHASIL DIPERBARUI KE DATABASE ]\nOperator: {op_name} (DEPAN ✓ | KIRI ✓ | KANAN ✓)",
+                text=f"[ 3-POSE FACE ID BERHASIL DIPERBARUI KE DATABASE ]\nOperator: {op_name} (DEPAN: OK | KIRI: OK | KANAN: OK)",
                 text_color=COLOR_EMERALD,
             )
         else:
@@ -1015,9 +1015,9 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
             is_masked, _ = self.auth_gate.is_face_masked(frame, bbox) if detected else (False, 1.0)
 
             poses = getattr(self, "_tab5_poses", {"FRONT": None, "LEFT": None, "RIGHT": None})
-            f_m = "✓" if poses.get("FRONT") else "✗"
-            l_m = "✓" if poses.get("LEFT") else "✗"
-            r_m = "✓" if poses.get("RIGHT") else "✗"
+            f_m = "OK" if poses.get("FRONT") else "-"
+            l_m = "OK" if poses.get("LEFT") else "-"
+            r_m = "OK" if poses.get("RIGHT") else "-"
             pose_labels = {"FRONT": "HADAP DEPAN", "LEFT": "TENGOK KIRI", "RIGHT": "TENGOK KANAN"}
 
             if is_masked:
@@ -1126,11 +1126,11 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         ctk.CTkLabel(dialog, text=f"Target Token: {serial}", font=get_mono_font(11), text_color=COLOR_TEXT_MUTED).pack(anchor="w", padx=20, pady=(0, 12))
 
         ctk.CTkLabel(dialog, text="Sandi Baru:", font=get_mono_font(11, "bold")).pack(anchor="w", padx=20)
-        entry_p1 = ctk.CTkEntry(dialog, placeholder_text="Masukkan sandi baru...", show="•", font=get_mono_font(11))
+        entry_p1 = ctk.CTkEntry(dialog, placeholder_text="Masukkan sandi baru...", show="*", font=get_mono_font(11))
         entry_p1.pack(fill="x", padx=20, pady=(2, 8))
 
         ctk.CTkLabel(dialog, text="Konfirmasi Sandi Baru:", font=get_mono_font(11, "bold")).pack(anchor="w", padx=20)
-        entry_p2 = ctk.CTkEntry(dialog, placeholder_text="Ulangi sandi baru...", show="•", font=get_mono_font(11))
+        entry_p2 = ctk.CTkEntry(dialog, placeholder_text="Ulangi sandi baru...", show="*", font=get_mono_font(11))
         entry_p2.pack(fill="x", padx=20, pady=(2, 12))
 
         lbl_err = ctk.CTkLabel(dialog, text="", font=get_mono_font(11), text_color=COLOR_CRIMSON)
@@ -1160,7 +1160,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         btn_row = ctk.CTkFrame(dialog, fg_color="transparent")
         btn_row.pack(fill="x", padx=20, pady=(4, 14))
         ctk.CTkButton(btn_row, text="BATAL", width=80, fg_color=COLOR_SURFACE, hover_color=COLOR_BORDER, command=dialog.destroy, font=get_mono_font(11, "bold")).pack(side="left")
-        ctk.CTkButton(btn_row, text="💾 SIMPAN SANDI", fg_color=COLOR_EMERALD, hover_color="#059669", text_color="#052E16", command=_save, font=get_mono_font(11, "bold")).pack(side="right", fill="x", expand=True, padx=(10, 0))
+        ctk.CTkButton(btn_row, text="SIMPAN SANDI", fg_color=COLOR_EMERALD, hover_color="#059669", text_color="#052E16", command=_save, font=get_mono_font(11, "bold")).pack(side="right", fill="x", expand=True, padx=(10, 0))
 
     def _tab5_add_user_dialog(self) -> None:
         dialog = ctk.CTkToplevel(self)
@@ -1176,17 +1176,40 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         scroll = ctk.CTkScrollableFrame(dialog, fg_color="transparent")
         scroll.pack(fill="both", expand=True, padx=14, pady=(0, 10))
 
-        # 1. Mount Path
+        # 1. Mount Path (auto-filled with physical USB mount or dongle_sample)
         ctk.CTkLabel(scroll, text="1. Folder Root USB Flash Drive:", font=get_mono_font(11, "bold")).pack(anchor="w")
         p_row = ctk.CTkFrame(scroll, fg_color="transparent")
         p_row.pack(fill="x", pady=(2, 8))
         entry_p = ctk.CTkEntry(p_row, placeholder_text="Pilih folder USB...", font=get_mono_font(11))
         entry_p.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        ctk.CTkButton(p_row, text="📁 BROWSE", width=80, font=get_mono_font(11, "bold"), command=lambda: (
-            d := filedialog.askdirectory(title="Pilih Mount USB", parent=dialog),
-            entry_p.delete(0, "end"),
-            entry_p.insert(0, d) if d else None
-        )).pack(side="right")
+
+        detected_mounts_t5 = self.auth_gate.get_removable_mounts() if self.auth_gate else []
+        default_mount_t5 = (
+            str(detected_mounts_t5[0])
+            if detected_mounts_t5
+            else (str(self.auth_gate.sample_token_path.parent) if self.auth_gate else "dongle_sample")
+        )
+        entry_p.insert(0, default_mount_t5)
+
+        def _browse_t5():
+            try:
+                dialog.grab_release()
+            except Exception:
+                pass
+            d = filedialog.askdirectory(
+                title="Pilih Mount USB (atau folder dongle_sample)",
+                initialdir="/Volumes" if Path("/Volumes").exists() else default_mount_t5,
+                parent=dialog,
+            )
+            try:
+                dialog.grab_set()
+            except Exception:
+                pass
+            if d:
+                entry_p.delete(0, "end")
+                entry_p.insert(0, d)
+
+        ctk.CTkButton(p_row, text="BROWSE", width=80, font=get_mono_font(11, "bold"), command=_browse_t5).pack(side="right")
 
         # 2. Operator Name
         ctk.CTkLabel(scroll, text="2. Nama Operator Baru:", font=get_mono_font(11, "bold")).pack(anchor="w")
@@ -1200,7 +1223,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         # 4. Password
         ctk.CTkLabel(scroll, text="4. Sandi Rahasia Operator:", font=get_mono_font(11, "bold")).pack(anchor="w")
-        entry_pwd = ctk.CTkEntry(scroll, placeholder_text="Setel password awal...", show="•", font=get_mono_font(11))
+        entry_pwd = ctk.CTkEntry(scroll, placeholder_text="Setel password awal...", show="*", font=get_mono_font(11))
         entry_pwd.pack(fill="x", pady=(2, 10))
 
         # 5. Face Camera Capture (3-Pose: DEPAN, KIRI, KANAN)
@@ -1215,7 +1238,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         cam_preview = ctk.CTkLabel(
             cam_box,
-            text="[ KAMERA 3-POSE STANDBY ]\nKlik 'MULAI SCAN 3-POSE' lalu ikuti: DEPAN ➔ KIRI ➔ KANAN",
+            text="[ KAMERA 3-POSE STANDBY ]\nKlik 'MULAI SCAN 3-POSE' lalu ikuti: DEPAN -> KIRI -> KANAN",
             font=get_mono_font(11, "bold"),
             text_color=COLOR_TEXT_MUTED,
             height=180,
@@ -1235,7 +1258,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         lbl_face_status = ctk.CTkLabel(
             scroll,
-            text="⚠️ TAHAP [0/3]: BELUM DIREKAM (DEPAN: ✗ | KIRI: ✗ | KANAN: ✗)",
+            text="TAHAP [0/3]: BELUM DIREKAM (DEPAN: - | KIRI: - | KANAN: -)",
             font=get_mono_font(11, "bold"),
             text_color=COLOR_AMBER,
         )
@@ -1279,17 +1302,17 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
             if not ok_c:
                 dialog_cam_state["poses"] = {"FRONT": None, "LEFT": None, "RIGHT": None}
                 dialog_cam_state["hold_count"] = 0
-                lbl_face_status.configure(text=f"⚠️ {msg_c}", text_color=COLOR_CRIMSON)
+                lbl_face_status.configure(text=f"GAGAL: {msg_c}", text_color=COLOR_CRIMSON)
                 return
 
             dialog_cam_state["captured_vector"] = bundle_str
             lbl_face_status.configure(
-                text="✓ 3-POSE FACE ID TERKUNCI [DEPAN: ✓ | KIRI: ✓ | KANAN: ✓]",
+                text="3-POSE FACE ID TERKUNCI [DEPAN: OK | KIRI: OK | KANAN: OK]",
                 text_color=COLOR_EMERALD,
             )
             _stop_new_user_cam()
             cam_preview.configure(
-                text="[ 3-POSE NEURAL FACE ID BERHASIL DIREKAM & TERKUNCI ]\n(DEPAN ✓ | KIRI ✓ | KANAN ✓)",
+                text="[ 3-POSE NEURAL FACE ID BERHASIL DIREKAM & TERKUNCI ]\n(DEPAN: OK | KIRI: OK | KANAN: OK)",
                 text_color=COLOR_EMERALD,
             )
 
@@ -1310,18 +1333,18 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
                 cur_pose, _ = self.auth_gate.get_last_detected_pose()
                 is_masked, _ = self.auth_gate.is_face_masked(frame, bbox) if detected else (False, 1.0)
 
-                f_m = "✓" if dialog_cam_state["poses"]["FRONT"] else "✗"
-                l_m = "✓" if dialog_cam_state["poses"]["LEFT"] else "✗"
-                r_m = "✓" if dialog_cam_state["poses"]["RIGHT"] else "✗"
+                f_m = "OK" if dialog_cam_state["poses"]["FRONT"] else "-"
+                l_m = "OK" if dialog_cam_state["poses"]["LEFT"] else "-"
+                r_m = "OK" if dialog_cam_state["poses"]["RIGHT"] else "-"
                 pose_names_id = {"FRONT": "LURUS KE DEPAN", "LEFT": "SEDIKIT KE KIRI", "RIGHT": "SEDIKIT KE KANAN"}
 
                 if is_masked:
                     dialog_cam_state["hold_count"] = 0
-                    lbl_face_status.configure(text="⚠️ MASKER TERDETEKSI! Lepas masker wajah Anda.", text_color=COLOR_CRIMSON)
+                    lbl_face_status.configure(text="MASKER TERDETEKSI! Lepas masker wajah Anda.", text_color=COLOR_CRIMSON)
                 elif needed_pose and detected and cur_pose == needed_pose:
                     dialog_cam_state["hold_count"] += 1
                     lbl_face_status.configure(
-                        text=f"◉ MENGUNCI POSE {pose_names_id[needed_pose]} ({dialog_cam_state['hold_count']}/3) [D:{f_m} K:{l_m} KN:{r_m}]",
+                        text=f"MENGUNCI POSE {pose_names_id[needed_pose]} ({dialog_cam_state['hold_count']}/3) [D:{f_m} K:{l_m} KN:{r_m}]",
                         text_color=COLOR_EMERALD,
                     )
                     if dialog_cam_state["hold_count"] >= 3:
@@ -1335,7 +1358,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
                 elif needed_pose:
                     dialog_cam_state["hold_count"] = max(0, dialog_cam_state["hold_count"] - 1)
                     lbl_face_status.configure(
-                        text=f"➔ ARAHKAN WAJAH {pose_names_id[needed_pose]} [D:{f_m} | K:{l_m} | KN:{r_mark if 'r_mark' in locals() else r_m}]",
+                        text=f"ARAHKAN WAJAH {pose_names_id[needed_pose]} [D:{f_m} | K:{l_m} | KN:{r_m}]",
                         text_color=COLOR_PRIMARY,
                     )
             else:
@@ -1364,7 +1387,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
                     lbl_face_status.configure(text="Kamera tidak dapat dibuka! Cek izin sistem.", text_color=COLOR_CRIMSON)
                     return
                 dialog_cam_state["running"] = True
-                lbl_face_status.configure(text="◉ TAHAP 1/3: Hadapkan wajah LURUS KE DEPAN...", text_color=COLOR_PRIMARY)
+                lbl_face_status.configure(text="TAHAP 1/3: Hadapkan wajah LURUS KE DEPAN...", text_color=COLOR_PRIMARY)
                 _poll_new_user_cam()
             except Exception as exc:
                 lbl_face_status.configure(text=f"Error kamera: {exc}", text_color=COLOR_CRIMSON)
@@ -1400,7 +1423,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         cam_btn_row.pack(fill="x", pady=(0, 10))
         ctk.CTkButton(
             cam_btn_row,
-            text="◉ MULAI SCAN 3-POSE",
+            text="MULAI SCAN 3-POSE",
             width=155,
             fg_color=COLOR_PRIMARY,
             hover_color=COLOR_PRIMARY_HOVER,
@@ -1409,7 +1432,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         ).pack(side="left", padx=(0, 8))
         ctk.CTkButton(
             cam_btn_row,
-            text="📸 KUNCI POSE SAAT INI",
+            text="KUNCI POSE SAAT INI",
             fg_color=COLOR_EMERALD,
             hover_color="#059669",
             text_color="#052E16",
@@ -1422,13 +1445,31 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
 
         def _do_add():
             m = entry_p.get().strip()
+            if not m:
+                m = default_mount_t5
             n = entry_name.get().strip()
             b = entry_badge.get().strip()
             pw = entry_pwd.get().strip()
             face_vec = dialog_cam_state.get("captured_vector")
 
+            if not face_vec and self.auth_gate:
+                existing_poses = [v for v in dialog_cam_state["poses"].values() if v]
+                if not existing_poses and dialog_cam_state.get("last_frame") is not None:
+                    det_f, _, _, bbox_f = self.auth_gate.detect_face_in_frame(dialog_cam_state["last_frame"])
+                    if det_f:
+                        v_now = self.auth_gate.extract_face_feature_vector(dialog_cam_state["last_frame"], bbox_f)
+                        if v_now:
+                            existing_poses = [v_now]
+                if existing_poses:
+                    p_front = dialog_cam_state["poses"].get("FRONT") or existing_poses[0]
+                    p_left = dialog_cam_state["poses"].get("LEFT") or existing_poses[-1]
+                    p_right = dialog_cam_state["poses"].get("RIGHT") or existing_poses[0]
+                    ok_c, bundle_str, _ = self.auth_gate.combine_multipose_vectors(p_front, p_left, p_right)
+                    if ok_c:
+                        face_vec = bundle_str
+
             if not m or not Path(m).exists():
-                lbl_msg.configure(text="Pilih folder USB yang valid!")
+                lbl_msg.configure(text=f"Folder USB tidak ditemukan: {m}")
                 return
             if not n or not b or not pw:
                 lbl_msg.configure(text="Semua kolom nama, badge, dan sandi wajib diisi!")
@@ -1437,7 +1478,7 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
                 lbl_msg.configure(text="Password minimal 6 karakter!")
                 return
             if not face_vec:
-                lbl_msg.configure(text="Wajah operator wajib direkam sebelum mendaftarkan USB!")
+                lbl_msg.configure(text="Klik 'MULAI SCAN 3-POSE' dan hadapkan wajah ke kamera dulu!")
                 return
 
             _stop_new_user_cam()
@@ -1464,5 +1505,5 @@ class ForensicWorkspaceTabs(ctk.CTkFrame):
         b_row = ctk.CTkFrame(dialog, fg_color="transparent")
         b_row.pack(fill="x", padx=20, pady=(4, 16))
         ctk.CTkButton(b_row, text="BATAL", width=80, fg_color=COLOR_SURFACE, hover_color=COLOR_BORDER, command=_on_close_dialog, font=get_mono_font(11, "bold")).pack(side="left")
-        ctk.CTkButton(b_row, text="💾 BUAT & DAFTARKAN DONGLE", fg_color=COLOR_EMERALD, hover_color="#059669", text_color="#052E16", command=_do_add, font=get_mono_font(11, "bold")).pack(side="right", fill="x", expand=True, padx=(10, 0))
+        ctk.CTkButton(b_row, text="BUAT & DAFTARKAN DONGLE", fg_color=COLOR_EMERALD, hover_color="#059669", text_color="#052E16", command=_do_add, font=get_mono_font(11, "bold")).pack(side="right", fill="x", expand=True, padx=(10, 0))
 

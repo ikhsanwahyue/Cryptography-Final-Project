@@ -62,11 +62,10 @@ class LexVaultApp(ctk.CTk):
             logger_callback=self.threadsafe_log,
         )
 
-        # Default dev dongle toggle from .env
-        if os.getenv("LEXVAULT_ALLOW_DEV_DONGLE", "true").lower() in ("1", "true", "yes"):
-            self.auth_gate.dev_dongle_enabled = True
+        # Default dev dongle toggle is OFF (requires physical USB unless manually toggled ON)
+        self.auth_gate.dev_dongle_enabled = False
 
-        self._update_db_badge()
+        # self._update_db_badge()
 
         # Build Views
         self.auth_frame = AuthWizardFrame(
@@ -108,28 +107,28 @@ class LexVaultApp(ctk.CTk):
             text_color=COLOR_TEXT_PRIMARY,
         ).pack(anchor="w")
 
-        ctk.CTkLabel(
-            left_box,
-            text="ISO/IEC 27037 STANDARD • SUPER-CRYPTO • ChaCha20 • LSB STEGO • HYBRID BLOCKCHAIN",
-            font=get_mono_font(10, "normal"),
-            text_color=COLOR_TEXT_MUTED,
-        ).pack(anchor="w")
+        # ctk.CTkLabel(
+        #     left_box,
+        #     text="ISO/IEC 27037 STANDARD | SUPER-CRYPTO | ChaCha20 | LSB STEGO | HYBRID BLOCKCHAIN",
+        #     font=get_mono_font(10, "normal"),
+        #     text_color=COLOR_TEXT_MUTED,
+        # ).pack(anchor="w")
 
         right_box = ctk.CTkFrame(self.header_bar, fg_color="transparent")
         right_box.pack(side="right", padx=18, pady=10)
 
-        self.badge_usb = StatusBadge(right_box, text="USB SESSION: LOCKED", status="LOCKED")
-        self.badge_usb.pack(side="left", padx=6)
+        # self.badge_usb = StatusBadge(right_box, text="USB SESSION: LOCKED", status="LOCKED")
+        # self.badge_usb.pack(side="left", padx=6)
 
-        self.badge_db = StatusBadge(right_box, text="DB: INITIALIZING", status="INFO")
-        self.badge_db.pack(side="left", padx=6)
+        # self.badge_db = StatusBadge(right_box, text="DB: INITIALIZING", status="INFO")
+        # self.badge_db.pack(side="left", padx=6)
 
-        self.badge_chain = StatusBadge(right_box, text="LEDGER: VERIFIED", status="SUCCESS")
-        self.badge_chain.pack(side="left", padx=6)
+        # self.badge_chain = StatusBadge(right_box, text="LEDGER: VERIFIED", status="SUCCESS")
+        # self.badge_chain.pack(side="left", padx=6)
 
         self.btn_lock_session = ctk.CTkButton(
             right_box,
-            text="🔒 LOCK VAULT",
+            text="LOCK VAULT",
             width=125,
             height=30,
             font=get_mono_font(11, "bold"),
@@ -144,10 +143,11 @@ class LexVaultApp(ctk.CTk):
         self.btn_lock_session.pack(side="left", padx=(10, 0))
 
     def _update_db_badge(self) -> None:
-        if self.db_manager.cloud_online:
-            self.badge_db.set_status("DB: SUPABASE + SQLITE", "SUCCESS")
-        else:
-            self.badge_db.set_status("DB: SQLITE FALLBACK", "WARN")
+        if hasattr(self, "badge_db"):
+            if self.db_manager.cloud_online:
+                self.badge_db.set_status("DB: SUPABASE + SQLITE", "SUCCESS")
+            else:
+                self.badge_db.set_status("DB: SQLITE FALLBACK", "WARN")
 
     def threadsafe_log(self, message: str, level: str = "INFO") -> None:
         try:
@@ -175,7 +175,8 @@ class LexVaultApp(ctk.CTk):
         self.workspace_frame.pack(fill="both", expand=True)
         self.workspace_frame.refresh_audit_ledger()
 
-        self.badge_usb.set_status(f"USB UNLOCKED [{dongle.serial_number}]", "UNLOCKED")
+        if hasattr(self, "badge_usb"):
+            self.badge_usb.set_status(f"USB UNLOCKED [{dongle.serial_number}]", "UNLOCKED")
         self.btn_lock_session.configure(state="normal")
         self.threadsafe_log(
             f"Sesi Custody Aktif untuk {dongle.operator_name} ({dongle.badge_id}). "
@@ -184,10 +185,11 @@ class LexVaultApp(ctk.CTk):
         )
 
     def _on_chain_integrity_updated(self, is_valid: bool) -> None:
-        if is_valid:
-            self.badge_chain.set_status("LEDGER: VERIFIED", "SUCCESS")
-        else:
-            self.badge_chain.set_status("LEDGER: TAMPER BREACH!", "DANGER")
+        if hasattr(self, "badge_chain"):
+            if is_valid:
+                self.badge_chain.set_status("LEDGER: VERIFIED", "SUCCESS")
+            else:
+                self.badge_chain.set_status("LEDGER: TAMPER BREACH!", "DANGER")
 
     def _on_hardware_kill_switch(self, reason: str) -> None:
         """Invoked from the background USB polling daemon thread."""
@@ -205,7 +207,7 @@ class LexVaultApp(ctk.CTk):
             self.workspace_frame.active_dongle = None
             self.workspace_frame.pack_forget()
 
-        self.badge_usb.set_status("USB SESSION: LOCKED", "LOCKED")
+        # self.badge_usb.set_status("USB SESSION: LOCKED", "LOCKED")
         self.btn_lock_session.configure(state="disabled")
         self.auth_frame.reset_for_lockdown(reason)
         self.auth_frame.pack(fill="both", expand=True)

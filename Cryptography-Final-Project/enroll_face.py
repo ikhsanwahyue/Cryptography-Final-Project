@@ -32,6 +32,8 @@ def enroll_from_webcam(serial_number: str = "LXV-USB-484BC196"):
 
     db = DatabaseManager()
     gate = AuthGate(db_manager=db)
+    gate.scan_hardware_dongle()
+    print(f"  Lokasi Database Dongle: {db.sqlite_path}")
 
     print("[2/3] Kamera aktif! Ikuti 3 tahap pemindaian (tanpa masker):")
     print("      Tahap 1: Hadap DEPAN (FRONT)")
@@ -126,6 +128,8 @@ def enroll_from_image_file(image_path: str, serial_number: str = "LXV-USB-484BC1
 
     db = DatabaseManager()
     gate = AuthGate(db_manager=db)
+    gate.scan_hardware_dongle()
+    print(f"  Lokasi Database Dongle: {db.sqlite_path}")
     detected, _, _, bbox = gate.detect_face_in_frame(frame)
     if not detected:
         print("[ERROR] Wajah tidak terdeteksi di foto tersebut.")
@@ -143,8 +147,8 @@ def enroll_from_image_file(image_path: str, serial_number: str = "LXV-USB-484BC1
         print(f"[STATUS CLOUD] Supabase Cloud Sync: {cloud_status}")
         vec = gate.extract_face_feature_vector(frame, bbox)
         if vec:
-            Path("database/default_face_seed.hex").write_text(vec)
-            print("[INFO] Template seeder 'database/default_face_seed.hex' berhasil diperbarui!")
+            Path("dongle_sample/default_face_seed.hex").write_text(vec)
+            print("[INFO] Template seeder 'dongle_sample/default_face_seed.hex' berhasil diperbarui!")
         return True
     else:
         print(f"[GAGAL] {msg}")
@@ -153,6 +157,8 @@ def enroll_from_image_file(image_path: str, serial_number: str = "LXV-USB-484BC1
 if __name__ == "__main__":
     db = DatabaseManager()
     gate = AuthGate(db_manager=db)
+    gate.scan_hardware_dongle()
+    print(f"  Lokasi Database Dongle: {db.sqlite_path}")
     detected_dongle = gate.scan_hardware_dongle()
     if detected_dongle.connected and detected_dongle.serial_number not in ("NONE", "CORRUPTED-TOKEN"):
         serial = detected_dongle.serial_number

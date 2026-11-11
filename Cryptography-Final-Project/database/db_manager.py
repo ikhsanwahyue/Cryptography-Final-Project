@@ -46,7 +46,35 @@ class DatabaseManager:
         if env_file.exists():
             load_dotenv(dotenv_path=env_file, override=True)
 
-        default_db = os.getenv("SQLITE_DB_PATH", "offline_vault.db")
+        self.sample_dir = self.base_dir / "dongle_sample"
+        self.sample_dir.mkdir(parents=True, exist_ok=True)
+        self.fallback_sqlite_path = self.sample_dir / "offline_vault.db"
+
+        # Migrate legacy root offline_vault.db into dongle_sample/offline_vault.db if present
+        legacy_root_db = self.base_dir / "offline_vault.db"
+        if legacy_root_db.exists():
+            try:
+                import shutil
+                if not self.fallback_sqlite_path.exists():
+                    shutil.copy2(legacy_root_db, self.fallback_sqlite_path)
+                legacy_root_db.unlink()
+            except Exception:
+                pass
+
+        # Migrate legacy database/default_face_seed.hex into dongle_sample/default_face_seed.hex
+        legacy_seed = Path(__file__).resolve().parent / "default_face_seed.hex"
+        self.seed_face_path = self.sample_dir / "default_face_seed.hex"
+        if legacy_seed.exists():
+            try:
+                if not self.seed_face_path.exists():
+                    self.seed_face_path.write_text(legacy_seed.read_text(encoding="utf-8"), encoding="utf-8")
+                legacy_seed.unlink()
+            except Exception:
+                pass
+
+        default_db = os.getenv("SQLITE_DB_PATH", "dongle_sample/offline_vault.db")
+        if default_db == "offline_vault.db":
+            default_db = "dongle_sample/offline_vault.db"
         self.sqlite_path = Path(sqlite_path) if sqlite_path else (self.base_dir / default_db)
         self.schema_path = Path(__file__).resolve().parent / "schema.sql"
         self.logger_callback = logger_callback
@@ -60,6 +88,100 @@ class DatabaseManager:
         self._init_sqlite()
         self._init_supabase()
         self._seed_default_dongle()
+
+    def set_active_dongle_storage(self, mount_dir: Optional[Path] = None) -> Path:
+        """
+        Switches the active SQLite database (`offline_vault.db`) to live directly inside:
+        - The mounted physical USB Flashdisk (`/Volumes/<USB_NAME>/offline_vault.db`), OR
+        - `dongle_sample/offline_vault.db` when Bypass USB / Virtual Dev Dongle is active.
+        Ensures only the physical owner of the USB drive (or `dongle_sample` in dev mode) holds the database.
+        """
+        with self._lock:
+            target_dir = Path(mount_dir) if (mount_dir and Path(mount_dir).exists()) else self.sample_dir
+            target_db = target_dir / "offline_vault.db"
+            if self.sqlite_path != target_db or not target_db.exists():
+                self.sqlite_path = target_db
+                self._init_sqlite()
+                self._sync_from_key_file(target_dir / "classified.key")
+            return self.sqlite_path
+
+    def _sync_from_key_file(self, key_file: Path) -> None:
+        """If classified.key on the USB/dongle_sample carries embedded dongle & face records, ensure SQLite on the USB has them."""
+        if not key_file.exists():
+            return
+        try:
+            data = json.loads(key_file.read_text(encoding="utf-8"))
+            serial = str(data.get("hardware_binding") or "").strip()
+            if not serial:
+                return
+            face_h = str(data.get("face_profile_hash") or "")
+            pwd_salt = str(data.get("password_salt") or "")
+            pwd_hash = str(data.get("password_hash") or "")
+            op_name = str(data.get("operator_name") or "Kompol. Dr. Aris Prakoso, M.Si (Forensik)")
+            badge = str(data.get("badge_id") or "DF-INA-88219")
+            sig = str(data.get("signature_sha256") or "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918")
+
+            conn = self._get_sqlite_conn()
+            try:
+                cur = conn.execute("SELECT face_profile_hash FROM authorized_dongles WHERE serial_number = ?", (serial,))
+                row = cur.fetchone()
+                if not row and pwd_salt and pwd_hash:
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    front_e, left_e, right_e, model_e = self._unpack_multipose_columns(face_h)
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO authorized_dongles (
+                            serial_number, operator_name, badge_id, token_signature,
+                            password_salt, password_hash, face_profile_hash,
+                            face_embedding_front, face_embedding_left, face_embedding_right,
+                            biometric_model, biometric_updated_at, is_active, registered_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                        """,
+                        (serial, op_name, badge, sig, pwd_salt, pwd_hash, face_h, front_e, left_e, right_e, model_e, now_iso, now_iso),
+                    )
+                    conn.commit()
+                elif row and face_h.startswith("LXV_SFACE_V3:") and not str(row[0] or "").startswith("LXV_SFACE_V3:"):
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    front_e, left_e, right_e, model_e = self._unpack_multipose_columns(face_h)
+                    conn.execute(
+                        """
+                        UPDATE authorized_dongles
+                        SET face_profile_hash = ?, face_embedding_front = ?, face_embedding_left = ?,
+                            face_embedding_right = ?, biometric_model = ?, biometric_updated_at = ?
+                        WHERE serial_number = ?
+                        """,
+                        (face_h, front_e, left_e, right_e, model_e, now_iso, serial),
+                    )
+                    conn.commit()
+            finally:
+                conn.close()
+        except Exception:
+            pass
+
+    def _sync_to_key_file(self, serial_number: str) -> None:
+        """Mirrors the dongle's face_profile_hash and credentials into classified.key in the active dongle directory."""
+        key_file = self.sqlite_path.parent / "classified.key"
+        if not key_file.exists():
+            return
+        try:
+            conn = self._get_sqlite_conn()
+            try:
+                cur = conn.execute("SELECT * FROM authorized_dongles WHERE serial_number = ?", (serial_number,))
+                row = cur.fetchone()
+            finally:
+                conn.close()
+            if not row:
+                return
+            rec = dict(row)
+            key_data = json.loads(key_file.read_text(encoding="utf-8"))
+            key_data["operator_name"] = rec.get("operator_name", "")
+            key_data["badge_id"] = rec.get("badge_id", "")
+            key_data["password_salt"] = rec.get("password_salt", "")
+            key_data["password_hash"] = rec.get("password_hash", "")
+            key_data["face_profile_hash"] = rec.get("face_profile_hash", "")
+            key_file.write_text(json.dumps(key_data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
     def _log(self, message: str, level: str = "INFO") -> None:
         if self.logger_callback:
@@ -182,10 +304,9 @@ class DatabaseManager:
         pwd_hash = hashlib.sha256(salt_bytes + default_password.encode("utf-8")).hexdigest()
         token_sig = "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"
 
-        seed_face_path = Path(__file__).resolve().parent / "default_face_seed.hex"
         default_face = ""
-        if seed_face_path.exists():
-            seed_content = seed_face_path.read_text(encoding="utf-8").strip()
+        if self.seed_face_path.exists():
+            seed_content = self.seed_face_path.read_text(encoding="utf-8").strip()
             if seed_content.startswith("LXV_SFACE_V3:"):
                 default_face = seed_content
 
@@ -313,9 +434,10 @@ class DatabaseManager:
                     ),
                 )
                 conn.commit()
-                return True
             finally:
                 conn.close()
+            self._sync_to_key_file(serial_number)
+            return True
 
     def get_dongle(self, serial_number: str) -> Optional[Dict[str, Any]]:
         local_result: Optional[Dict[str, Any]] = None
@@ -333,10 +455,22 @@ class DatabaseManager:
             finally:
                 conn.close()
 
-        # If local SQLite already has the full LXV_SFACE_V3 3-pose neural profile, return immediately
-        # (prevents 30 FPS webcam lag and prevents Supabase VARCHAR(128) 'EMPTY' from overwriting valid local V3 vectors)
-        if local_result and str(local_result.get("face_profile_hash") or "").startswith("LXV_SFACE_V3:"):
-            return local_result
+        # Check active dongle's classified.key as well if SQLite doesn't have face_profile_hash yet
+        key_file = self.sqlite_path.parent / "classified.key"
+        key_face = ""
+        if key_file.exists():
+            try:
+                kd = json.loads(key_file.read_text(encoding="utf-8"))
+                if str(kd.get("face_profile_hash") or "").startswith("LXV_SFACE_V3:"):
+                    key_face = str(kd["face_profile_hash"])
+            except Exception:
+                pass
+
+        if local_result:
+            if not str(local_result.get("face_profile_hash") or "").startswith("LXV_SFACE_V3:") and key_face:
+                local_result["face_profile_hash"] = key_face
+            if str(local_result.get("face_profile_hash") or "").startswith("LXV_SFACE_V3:"):
+                return local_result
 
         if self.cloud_online and self.supabase_client is not None:
             try:
@@ -350,29 +484,18 @@ class DatabaseManager:
                 if resp.data:
                     cloud_row = dict(resp.data[0])
                     cloud_row["is_active"] = bool(cloud_row.get("is_active", False))
-                    # Merge local face_profile_hash if cloud only has EMPTY or compact SHA reference
                     cloud_face = str(cloud_row.get("face_profile_hash") or "")
                     if not cloud_face.startswith("LXV_SFACE_V3:"):
                         if local_result and str(local_result.get("face_profile_hash") or "").startswith("LXV_SFACE_V3:"):
                             cloud_row["face_profile_hash"] = local_result["face_profile_hash"]
-                        else:
-                            seed_p = Path(__file__).resolve().parent / "default_face_seed.hex"
-                            if seed_p.exists():
-                                seed_txt = seed_p.read_text(encoding="utf-8").strip()
-                                if seed_txt.startswith("LXV_SFACE_V3:"):
-                                    cloud_row["face_profile_hash"] = seed_txt
+                        elif key_face:
+                            cloud_row["face_profile_hash"] = key_face
                     return cloud_row
             except Exception as exc:
                 self.cloud_online = False
                 self._log(f"Supabase read timeout/error ({exc}), reading from SQLite.", "WARN")
 
         if local_result:
-            if not str(local_result.get("face_profile_hash") or "").startswith("LXV_SFACE_V3:"):
-                seed_p = Path(__file__).resolve().parent / "default_face_seed.hex"
-                if seed_p.exists():
-                    seed_txt = seed_p.read_text(encoding="utf-8").strip()
-                    if seed_txt.startswith("LXV_SFACE_V3:"):
-                        local_result["face_profile_hash"] = seed_txt
             return local_result
         return None
 
@@ -410,9 +533,10 @@ class DatabaseManager:
                     (password_salt, password_hash, serial_number),
                 )
                 conn.commit()
-                return True
             finally:
                 conn.close()
+            self._sync_to_key_file(serial_number)
+            return True
 
     def update_dongle_face_profile(self, serial_number: str, face_profile_hash: str) -> bool:
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -492,9 +616,10 @@ class DatabaseManager:
                         ),
                     )
                 conn.commit()
-                return True
             finally:
                 conn.close()
+            self._sync_to_key_file(serial_number)
+            return True
 
     # =========================================================================
     # EVIDENCE RECORDS PERSISTENCE

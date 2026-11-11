@@ -275,6 +275,9 @@ class AuthGate:
                         message=f"Token classified.key rusak / bukan JSON valid: {exc}",
                     )
 
+                # Switch active SQLite database directly onto the physical USB Flashdisk!
+                self.db_manager.set_active_dongle_storage(mount)
+
                 # Match hardware serial from USB bus or token hardware_binding
                 detected_serial = ""
                 if usb_devices:
@@ -290,6 +293,36 @@ class AuthGate:
                     if db_record is not None:
                         detected_serial = bound_serial
 
+                # If USB has classified.key from an earlier setup before DB was moved onto USB,
+                # migrate its record from dongle_sample/offline_vault.db onto the USB's offline_vault.db
+                if db_record is None and detected_serial:
+                    fallback_db = self.db_manager.fallback_sqlite_path
+                    if fallback_db.exists() and fallback_db != self.db_manager.sqlite_path:
+                        try:
+                            import sqlite3
+                            fconn = sqlite3.connect(str(fallback_db))
+                            fconn.row_factory = sqlite3.Row
+                            frow = fconn.execute(
+                                "SELECT * FROM authorized_dongles WHERE serial_number = ?",
+                                (detected_serial,),
+                            ).fetchone()
+                            fconn.close()
+                            if frow:
+                                frec = dict(frow)
+                                self.db_manager.register_dongle(
+                                    serial_number=detected_serial,
+                                    operator_name=str(frec.get("operator_name", "Forensic Custodian")),
+                                    badge_id=str(frec.get("badge_id", "DF-INA-88219")),
+                                    token_signature=str(frec.get("token_signature", "")),
+                                    password_salt=str(frec.get("password_salt", "")),
+                                    password_hash=str(frec.get("password_hash", "")),
+                                    face_profile_hash=str(frec.get("face_profile_hash", "")),
+                                    is_active=bool(frec.get("is_active", 1)),
+                                )
+                                db_record = self.db_manager.get_dongle(detected_serial)
+                        except Exception:
+                            pass
+
                 if db_record is None:
                     return DongleStatus(
                         connected=True,
@@ -299,7 +332,7 @@ class AuthGate:
                         token_file_path=str(candidate_key),
                         operator_name="UNREGISTERED",
                         badge_id="N/A",
-                        message=f"Serial USB '{detected_serial}' belum terdaftar di database.",
+                        message=f"Serial USB '{detected_serial}' belum terdaftar di database Flashdisk.",
                     )
 
                 if not bool(db_record.get("is_active", False)):
@@ -322,13 +355,14 @@ class AuthGate:
                     token_file_path=str(candidate_key),
                     operator_name=str(db_record.get("operator_name", "Forensic Custodian")),
                     badge_id=str(db_record.get("badge_id", "DF-001")),
-                    message="Hardware USB Dongle & classified.key Terverifikasi (ACTIVE).",
+                    message=f"Hardware USB Dongle & DB Flashdisk ({mount.name}/offline_vault.db) Terverifikasi.",
                     is_dev_fallback=False,
                 )
                 self.active_dongle = status
                 return status
 
         # 2. Check if Dev Dongle Simulation (`dongle_sample/classified.key`) is enabled
+        self.db_manager.set_active_dongle_storage(self.sample_token_path.parent)
         if self.dev_dongle_enabled and self.sample_token_path.exists():
             try:
                 token_data = json.loads(self.sample_token_path.read_text(encoding="utf-8"))
@@ -343,7 +377,7 @@ class AuthGate:
                         token_file_path=str(self.sample_token_path),
                         operator_name=str(db_record.get("operator_name", "Forensic Custodian")),
                         badge_id=str(db_record.get("badge_id", "DF-INA-88219")),
-                        message="Virtual Dev Dongle (dongle_sample/classified.key) Aktif & Terverifikasi.",
+                        message="Bypass USB (dongle_sample/offline_vault.db & classified.key) Aktif.",
                         is_dev_fallback=True,
                     )
                     self.active_dongle = status
@@ -401,12 +435,19 @@ class AuthGate:
             "hardware_binding": serial,
             "clearance_level": "LEVEL_5_FORENSIC_CUSTODIAN",
             "signature_sha256": token_sig,
+            "operator_name": operator_name,
+            "badge_id": badge_id,
+            "password_salt": salt_hex,
+            "password_hash": pwd_hash,
+            "face_profile_hash": face_profile_hash or "",
             "issued_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
 
         try:
             key_file = target_dir / "classified.key"
             key_file.write_text(json.dumps(token_payload, indent=2), encoding="utf-8")
+            # Switch active SQLite database directly onto the target USB drive (or dongle_sample)
+            self.db_manager.set_active_dongle_storage(target_dir)
             self.db_manager.register_dongle(
                 serial_number=serial,
                 operator_name=operator_name,
@@ -417,8 +458,11 @@ class AuthGate:
                 face_profile_hash=face_profile_hash or "",
                 is_active=True,
             )
-            self._log(f"USB Dongle provisioned at {key_file} (Serial: {serial})", "SUCCESS")
-            return True, f"Berhasil mendaftarkan USB Dongle ({serial}) di {key_file}"
+            self._log(
+                f"USB Dongle & Database ({target_dir / 'offline_vault.db'}) provisioned (Serial: {serial})",
+                "SUCCESS",
+            )
+            return True, f"Berhasil mendaftarkan USB Dongle & Database ({serial}) di {target_dir}"
         except Exception as exc:
             return False, f"Gagal menulis classified.key ke USB: {exc}"
 
@@ -927,11 +971,13 @@ class AuthGate:
         ok_db = self.db_manager.update_dongle_face_profile(serial_number, bundle_str)
         if ok_db:
             try:
-                seed_path = self.base_dir / "database" / "default_face_seed.hex"
+                seed_path = self.base_dir / "dongle_sample" / "default_face_seed.hex"
+                seed_path.parent.mkdir(parents=True, exist_ok=True)
                 seed_path.write_text(bundle_str, encoding="utf-8")
             except Exception:
                 pass
-            storage_type = "Supabase Cloud & SQLite" if self.db_manager.cloud_online else "SQLite Lokal"
+            db_loc = f"{self.db_manager.sqlite_path.parent.name}/{self.db_manager.sqlite_path.name}"
+            storage_type = f"Supabase Cloud & {db_loc}" if self.db_manager.cloud_online else f"Flashdisk/Dongle ({db_loc})"
             self._log(
                 f"Profil 3-Pose SFace 128-D berhasil disimpan untuk '{serial_number}' ({storage_type}).",
                 "SUCCESS",
