@@ -84,6 +84,7 @@ class DatabaseManager:
         self.supabase_key = os.getenv("SUPABASE_KEY", "").strip()
         self.supabase_client: Optional[Client] = None
         self.cloud_online: bool = False
+        self._synced_cloud_serials: set = set()
 
         self._init_sqlite()
         self._init_supabase()
@@ -102,7 +103,7 @@ class DatabaseManager:
             if self.sqlite_path != target_db or not target_db.exists():
                 self.sqlite_path = target_db
                 self._init_sqlite()
-                self._sync_from_key_file(target_dir / "classified.key")
+            self._sync_from_key_file(target_dir / "classified.key")
             return self.sqlite_path
 
     def _sync_from_key_file(self, key_file: Path) -> None:
@@ -155,6 +156,20 @@ class DatabaseManager:
                     conn.commit()
             finally:
                 conn.close()
+
+            # Ensure this flashdisk's user record is also mirrored to Supabase Cloud once per session
+            if serial and pwd_salt and pwd_hash and serial not in self._synced_cloud_serials:
+                self._synced_cloud_serials.add(serial)
+                self.register_dongle(
+                    serial_number=serial,
+                    operator_name=op_name,
+                    badge_id=badge,
+                    token_signature=sig,
+                    password_salt=pwd_salt,
+                    password_hash=pwd_hash,
+                    face_profile_hash=face_h,
+                    is_active=True,
+                )
         except Exception:
             pass
 
@@ -355,6 +370,7 @@ class DatabaseManager:
     ) -> bool:
         now_iso = datetime.now(timezone.utc).isoformat()
         front_emb, left_emb, right_emb, bio_model = self._unpack_multipose_columns(face_profile_hash)
+        # Core 8-column payload matching database/seed_data.sql (lets PostgreSQL default registered_at)
         base_payload = {
             "serial_number": serial_number,
             "operator_name": operator_name,
@@ -364,7 +380,6 @@ class DatabaseManager:
             "password_hash": password_hash,
             "face_profile_hash": face_profile_hash or "",
             "is_active": bool(is_active),
-            "registered_at": now_iso,
         }
         extended_payload = {
             **base_payload,
@@ -373,6 +388,7 @@ class DatabaseManager:
             "face_embedding_right": right_emb,
             "biometric_model": bio_model,
             "biometric_updated_at": now_iso,
+            "registered_at": now_iso,
         }
 
         if self.supabase_client is None and self.supabase_url and self.supabase_key:
@@ -399,7 +415,7 @@ class DatabaseManager:
                         compact_payload = {**base_payload, "face_profile_hash": compact_hash}
                         self.supabase_client.table("authorized_dongles").upsert(compact_payload).execute()
                         self.cloud_online = True
-                        self._log(f"Supabase Cloud: Dongle '{serial_number}' tersimpan (compact VARCHAR(128) mode).", "SUCCESS")
+                        self._log(f"Supabase Cloud: Dongle '{serial_number}' ({operator_name}) tersimpan ke Cloud (compact mode).", "SUCCESS")
                     except Exception as exc:
                         self.cloud_online = False
                         self._log(f"Supabase write failed ({exc}), persisting to local SQLite.", "WARN")

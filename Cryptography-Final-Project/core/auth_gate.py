@@ -278,20 +278,18 @@ class AuthGate:
                 # Switch active SQLite database directly onto the physical USB Flashdisk!
                 self.db_manager.set_active_dongle_storage(mount)
 
-                # Match hardware serial from USB bus or token hardware_binding
-                detected_serial = ""
-                if usb_devices:
+                # Prioritize the token's own hardware_binding serial so multiple USB flashdisks never collide
+                detected_serial = str(token_data.get("hardware_binding") or "").strip()
+                if not detected_serial and usb_devices:
                     detected_serial = usb_devices[0].get("serial", "")
-                if not detected_serial:
-                    detected_serial = str(token_data.get("hardware_binding") or "").strip()
 
                 db_record = self.db_manager.get_dongle(detected_serial)
-                if db_record is None and token_data.get("hardware_binding"):
-                    # Try matching by token's bound serial if bus serial differed
-                    bound_serial = str(token_data.get("hardware_binding")).strip()
-                    db_record = self.db_manager.get_dongle(bound_serial)
-                    if db_record is not None:
-                        detected_serial = bound_serial
+                if db_record is None and usb_devices:
+                    bus_serial = usb_devices[0].get("serial", "")
+                    if bus_serial and bus_serial != detected_serial:
+                        db_record = self.db_manager.get_dongle(bus_serial)
+                        if db_record is not None:
+                            detected_serial = bus_serial
 
                 # If USB has classified.key from an earlier setup before DB was moved onto USB,
                 # migrate its record from dongle_sample/offline_vault.db onto the USB's offline_vault.db
@@ -418,12 +416,9 @@ class AuthGate:
         if not target_dir.exists() or not target_dir.is_dir():
             return False, f"Mount path tidak ditemukan: {mount_path}"
 
-        usb_devices = self.get_os_usb_serials()
-        serial = (
-            usb_devices[0]["serial"]
-            if usb_devices
-            else f"LXV-USB-{secrets.token_hex(4).upper()}"
-        )
+        # Generate a unique serial for each newly provisioned USB flashdisk / operator
+        # so provisioning a second flashdisk never overwrites an existing dongle serial in Supabase.
+        serial = f"LXV-USB-{secrets.token_hex(4).upper()}"
 
         salt_hex, pwd_hash = self.hash_password_with_new_salt(password)
         token_sig = hashlib.sha256(f"{serial}:{badge_id}:{salt_hex}".encode("utf-8")).hexdigest()
@@ -444,9 +439,10 @@ class AuthGate:
         }
 
         try:
+            prev_sqlite_path = self.db_manager.sqlite_path
             key_file = target_dir / "classified.key"
             key_file.write_text(json.dumps(token_payload, indent=2), encoding="utf-8")
-            # Switch active SQLite database directly onto the target USB drive (or dongle_sample)
+            # Switch active SQLite database onto the target USB drive so offline_vault.db is created on that FD
             self.db_manager.set_active_dongle_storage(target_dir)
             self.db_manager.register_dongle(
                 serial_number=serial,
@@ -458,6 +454,9 @@ class AuthGate:
                 face_profile_hash=face_profile_hash or "",
                 is_active=True,
             )
+            # If an operator is currently logged in with another dongle, restore their active sqlite_path
+            if self.session_unlocked and self.active_dongle and prev_sqlite_path.exists():
+                self.db_manager.sqlite_path = prev_sqlite_path
             self._log(
                 f"USB Dongle & Database ({target_dir / 'offline_vault.db'}) provisioned (Serial: {serial})",
                 "SUCCESS",
